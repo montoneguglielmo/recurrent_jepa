@@ -1,0 +1,20 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environments
+env/
+venv/
+.le-wm/
+
+# Outputs / logs
+outputs/
+*.log
+
+# OS stuff
+.DS_Store
+
+# IDEs
+.vscode/
+.idea/
