@@ -7,6 +7,7 @@ class JEPA(nn.Module):
         super().__init__()
         self.raw_encoders = nn.ModuleList(raw_encoders)
         self.encoder = encoder
+        self.predictor = predictor
         self.decoder = decoder
         self.sigreg = sigreg
     
@@ -17,16 +18,18 @@ class JEPA(nn.Module):
             encoder_input.append(raw_encoder(raw_input))
         encoder_input = torch.cat(encoder_input, axis=2)
         info['embeddings'], _ = self.encoder(encoder_input)
+        info['pred_embeddings'] = self.predictor(info['embeddings'])
+        
         # info['embeddings'] BxTxD
         decoder_input = torch.cat([info['embeddings'][:, :-1], info['embeddings'][:, 1:]], dim=2)
         info['action'] = self.decoder(decoder_input)
         return info
 
-    def cost(self, info):
+    def cost(self, info, lambd):
         info = self.forward(info)
     
-        emb = info['embeddings'][:,:-1]
-        tgt_emb = info['embeddings'][:,1:]
+        emb = info['pred_embeddings']
+        tgt_emb = info['embeddings']
         
         act = info['action']
         tgt_act = info['target_actions'][:,1:]
@@ -36,7 +39,6 @@ class JEPA(nn.Module):
         output["pred_loss"] = (emb - tgt_emb).pow(2).mean()
         output["action_loss"] = (act - tgt_act).pow(2).mean()
         output["sigreg_loss"]= self.sigreg(emb.transpose(0, 1))
-        lambd = 0.01
         output["loss"] = output["pred_loss"] + output["action_loss"] + lambd * output["sigreg_loss"]
         return output
 

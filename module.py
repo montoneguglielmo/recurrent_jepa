@@ -288,7 +288,7 @@ class ARPredictor(nn.Module):
 
 
 class CNNNet(nn.Module):
-    def __init__(self, num_conv_layers=2, num_filters=None, input_size=32):
+    def __init__(self, num_conv_layers=2, num_filters=None, input_size=32, output_size=None):
         super().__init__()
 
         if num_filters is None:
@@ -311,10 +311,14 @@ class CNNNet(nn.Module):
                 dummy = self.pool(F.relu(conv(dummy)))
             flat_size = dummy.numel()
 
-        self.fc1 = nn.Linear(flat_size, 120)
-        self.fc2 = nn.Linear(120, 84)
-        self.fc3 = nn.Linear(84, 10)
-        self.output_size = 10
+        fc1_size = flat_size // 2
+        fc2_size = flat_size // 4
+        if output_size is None:
+            output_size = flat_size // 8
+        self.fc1 = nn.Linear(flat_size, fc1_size)
+        self.fc2 = nn.Linear(fc1_size, fc2_size)
+        self.fc3 = nn.Linear(fc2_size, output_size)
+        self.output_size = output_size
 
     def forward(self, x):
         for conv in self.conv_layers:

@@ -17,36 +17,6 @@ from module import ARPredictor, Embedder, MLP, SIGReg, CNNNet, TimeWrapper
 from utils import get_column_normalizer, get_img_preprocessor, ModelObjectCallBack, setup_device
 from tqdm import tqdm
 
-def lejepa_forward(self, batch, stage, cfg):
-    """encode observations, predict next states, compute losses."""
-
-    ctx_len = cfg.wm.history_size
-    n_preds = cfg.wm.num_preds
-    lambd = cfg.loss.sigreg.weight
-
-    # Replace NaN values with 0 (occurs at sequence boundaries)
-    batch["action"] = torch.nan_to_num(batch["action"], 0.0)
-
-    output = self.model.encode(batch)
-
-    emb = output["emb"]  # (B, T, D)
-    act_emb = output["act_emb"]
-
-    ctx_emb = emb[:, :ctx_len]
-    ctx_act = act_emb[:, : ctx_len]
-
-    tgt_emb = emb[:, n_preds:] # label
-    pred_emb = self.model.predict(ctx_emb, ctx_act) # pred
-
-    # LeWM loss
-    output["pred_loss"] = (pred_emb - tgt_emb).pow(2).mean()
-    output["sigreg_loss"]= self.sigreg(emb.transpose(0, 1))
-    output["loss"] = output["pred_loss"] + lambd * output["sigreg_loss"]  
-
-    losses_dict = {f"{stage}/{k}": v.detach() for k, v in output.items() if "loss" in k}
-    self.log_dict(losses_dict, on_step=True, sync_dist=True)
-    return output
-
 @hydra.main(version_base=None, config_path="./config/train", config_name="lewm")
 def run(cfg):
     #########################
@@ -78,28 +48,16 @@ def run(cfg):
 
     train = torch.utils.data.DataLoader(train_set, **cfg.loader,shuffle=True, drop_last=True, generator=rnd_gen)
     val = torch.utils.data.DataLoader(val_set, **cfg.loader, shuffle=False, drop_last=False)
-    
-    train_iter = iter(train)
 
-    # Get the first batch
-    first_batch = next(train_iter)
-
-    print('pixels shape:', first_batch['pixels'].shape)
-    print('action shape:', first_batch['action'].shape)
-    print('proprio shape:',first_batch['proprio'].shape)
-    print('state shape:', first_batch['state'].shape)
-    
     # ##############################
     # ##       model / optim      ##
     # ##############################
-
-    
-    vision_encoder = CNNNet(num_conv_layers=cfg.encoders.vision_encoder.num_conv_layers, input_size=cfg.img_size)
+    vision_encoder = CNNNet(
+        num_conv_layers=cfg.encoders.vision_encoder.num_conv_layers, 
+        input_size=cfg.img_size)
     vision_encoder = TimeWrapper(vision_encoder)
     
-    effective_act_dim = cfg.data.dataset.frameskip * cfg.wm.action_dim
-
-    proprio_encoder = MLP(input_dim=4,
+    proprio_encoder = MLP(input_dim=dataset.get_dim('proprio'),
                           hidden_dim=cfg.encoders.proprio_encoder.hidden_dim,
                           output_dim=cfg.encoders.proprio_encoder.embed_dim
                           )
@@ -111,27 +69,19 @@ def run(cfg):
         batch_first=True
     )
     
-    v_enc = vision_encoder(first_batch['pixels']) 
-    p_enc = proprio_encoder(first_batch['proprio'])
+    predictor = MLP(
+        input_dim = cfg.encoders.state_encoder.hidden_dim,
+        hidden_dim = cfg.predictor.hidden_dim,
+        output_dim = cfg.encoders.state_encoder.hidden_dim   
+    )
+    predictor = TimeWrapper(predictor)
     
-    state_inp = torch.cat([v_enc, p_enc], axis=2)
-    print('state_inp', state_inp.shape)
-    
-    out, hn = state_encoder(state_inp)
-    print('out', out.shape)
-
-
     action_decoder = MLP(input_dim=cfg.encoders.state_encoder.hidden_dim*2,
                          hidden_dim=cfg.encoders.action_decoder.hidden_dim,
                          output_dim=10
                          )
     action_decoder = TimeWrapper(action_decoder)
 
-    decoder_input = torch.cat([out[:, :-1], out[:, 1:]], dim=2)
-
-    print('decoder_input shape', decoder_input.shape)
-    a_dec = action_decoder(decoder_input) 
-    print('a_dec', a_dec.shape)
     
     # encoder = spt.backbone.utils.vit_hf(
     #     cfg.encoder_scale,
@@ -173,6 +123,7 @@ def run(cfg):
         raw_encoders=[vision_encoder, proprio_encoder],
         encoder = state_encoder,
         decoder = action_decoder,
+        predictor = predictor,
         sigreg = SIGReg(**cfg.loss.sigreg.kwargs)
     )
 
@@ -204,7 +155,7 @@ def run(cfg):
             optimizer.zero_grad()
             info = world_model(info)
             
-            total_loss = world_model.cost(info)
+            total_loss = world_model.cost(info, cfg.sigreg.weight)
             
             total_loss["loss"].backward()
             optimizer.step()
@@ -212,9 +163,10 @@ def run(cfg):
             # Update progress bar
             pbar.set_postfix(
                 {
-                    "loss": f"{total_loss['pred_loss']:.4f}",
-                    "vc": f"{total_loss['pred_loss']:.4f}",
-                    "pred": f"{total_loss['pred_loss']:.4f}",
+                    "loss": f"{total_loss['loss']:.4f}",
+                    "pred_loss": f"{total_loss['pred_loss']:.4f}",
+                    "action_loss": f"{total_loss['action_loss']:.4f}",
+                    "reg_loss": f"{total_loss['sigreg_loss']:.4f}"
                 }
             )
 
