@@ -56,7 +56,9 @@ def run(cfg):
         num_conv_layers=cfg.encoders.vision_encoder.num_conv_layers, 
         input_size=cfg.img_size)
     vision_encoder = TimeWrapper(vision_encoder)
+    print('vision_encoder output size:', vision_encoder.output_size)
     
+    print('proprio_encoder input:', dataset.get_dim('proprio'))
     proprio_encoder = MLP(input_dim=dataset.get_dim('proprio'),
                           hidden_dim=cfg.encoders.proprio_encoder.hidden_dim,
                           output_dim=cfg.encoders.proprio_encoder.embed_dim

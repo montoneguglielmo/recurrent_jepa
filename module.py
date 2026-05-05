@@ -310,12 +310,13 @@ class CNNNet(nn.Module):
             dummy = torch.zeros(1, 3, input_size, input_size)
             for conv in self.conv_layers:
                 dummy = self.pool(F.relu(conv(dummy)))
+                print('dummy shape', dummy.shape)
             flat_size = dummy.numel()
 
-        fc1_size = flat_size // 2
-        fc2_size = flat_size // 4
+        fc1_size = flat_size // 8
+        fc2_size = flat_size // 16
         if output_size is None:
-            output_size = flat_size // 8
+            output_size = flat_size // 32
         self.fc1 = nn.Linear(flat_size, fc1_size)
         self.fc2 = nn.Linear(fc1_size, fc2_size)
         self.fc3 = nn.Linear(fc2_size, output_size)
