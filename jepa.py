@@ -25,21 +25,20 @@ class JEPA(nn.Module):
         info['action'] = self.decoder(decoder_input)
         return info
 
-    def cost(self, info, lambd):
-        info = self.forward(info)
-    
+    def cost(self, info, lambd):    
         emb = info['pred_embeddings']
         tgt_emb = info['embeddings']
         
         act = info['action']
-        tgt_act = info['target_actions'][:,1:]
+        tgt_act = info['target_actions'][:,:-1]
     
         # LeWM loss
         output = {}
         output["pred_loss"] = (emb - tgt_emb).pow(2).mean()
         output["action_loss"] = (act - tgt_act).pow(2).mean()
         output["sigreg_loss"]= self.sigreg(emb.transpose(0, 1))
-        output["loss"] = output["pred_loss"] + output["action_loss"] + lambd * output["sigreg_loss"]
+        #output["loss"] = output["pred_loss"] + output["action_loss"] + lambd * output["sigreg_loss"]
+        output["loss"] = output["action_loss"]
         return output
 
             

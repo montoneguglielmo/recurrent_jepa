@@ -28,7 +28,7 @@ loader:
 
 optimizer:
   type: AdamW
-  lr: 5e-5
+  lr: 1e-5
   weight_decay: 1e-3
   max_epochs: 100
  
@@ -53,18 +53,20 @@ encoders:
   vision_encoder:
     num_conv_layers: 2
   proprio_encoder:
-    hidden_dim: 10
-    embed_dim: 10
+    hidden_dim: 100
+    embed_dim: 100
   state_encoder:
     hidden_dim: 100
 
 decoder:
   action_decoder:
     embed_dim: 10
-    hidden_dim: 10
+    hidden_dim: 100
 
 predictor:
-  hidden_dim : 10
+  hidden_dim: 64
+  num_steps: 100
+  num_layers: 4
 
 loss:
   sigreg:

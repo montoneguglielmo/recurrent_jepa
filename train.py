@@ -13,7 +13,7 @@ from lightning.pytorch.loggers import WandbLogger
 from omegaconf import OmegaConf, open_dict
 
 from jepa import JEPA
-from module import ARPredictor, Embedder, MLP, SIGReg, CNNNet, TimeWrapper
+from module import ARPredictor, Embedder, MLP, SIGReg, CNNNet, TimeWrapper, ConditionalDiffusionPredictor
 from utils import get_column_normalizer, get_img_preprocessor, ModelObjectCallBack, setup_device
 from tqdm import tqdm
 
@@ -69,15 +69,15 @@ def run(cfg):
         batch_first=True
     )
     
-    predictor = MLP(
-        input_dim = cfg.encoders.state_encoder.hidden_dim,
+    predictor = ConditionalDiffusionPredictor(
+        embed_dim  = cfg.encoders.state_encoder.hidden_dim,
         hidden_dim = cfg.predictor.hidden_dim,
-        output_dim = cfg.encoders.state_encoder.hidden_dim   
+        num_steps  = cfg.predictor.num_steps,
+        num_layers = cfg.predictor.num_layers,
     )
-    predictor = TimeWrapper(predictor)
     
     action_decoder = MLP(input_dim=cfg.encoders.state_encoder.hidden_dim*2,
-                         hidden_dim=cfg.encoders.action_decoder.hidden_dim,
+                         hidden_dim=cfg.decoder.action_decoder.hidden_dim,
                          output_dim=10
                          )
     action_decoder = TimeWrapper(action_decoder)
@@ -155,7 +155,7 @@ def run(cfg):
             optimizer.zero_grad()
             info = world_model(info)
             
-            total_loss = world_model.cost(info, cfg.sigreg.weight)
+            total_loss = world_model.cost(info, cfg.loss.sigreg.weight)
             
             total_loss["loss"].backward()
             optimizer.step()
