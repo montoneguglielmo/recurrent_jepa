@@ -37,8 +37,9 @@ class JEPA(nn.Module):
         output["pred_loss"] = (emb - tgt_emb).pow(2).mean()
         output["action_loss"] = (act - tgt_act).pow(2).mean()
         output["sigreg_loss"]= self.sigreg(emb.transpose(0, 1))
+        output["emb_var"] = info['embeddings'].var(dim=0).mean()
         #output["loss"] = output["pred_loss"] + output["action_loss"] + lambd * output["sigreg_loss"]
-        output["loss"] = output["action_loss"]
+        output["loss"] = output["pred_loss"] + lambd * output["sigreg_loss"]
         return output
 
             

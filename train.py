@@ -84,43 +84,6 @@ def run(cfg):
                          )
     action_decoder = TimeWrapper(action_decoder)
 
-    
-    # encoder = spt.backbone.utils.vit_hf(
-    #     cfg.encoder_scale,
-    #     patch_size=cfg.patch_size,
-    #     image_size=cfg.img_size,
-    #     pretrained=False,
-    #     use_mask_token=False,
-    # )
-
-
-    # hidden_dim = encoder.config.hidden_size
-    # embed_dim = cfg.wm.get("embed_dim", hidden_dim)
-
-    # predictor = ARPredictor(
-    #     num_frames=cfg.wm.history_size,
-    #     input_dim=embed_dim,
-    #     hidden_dim=hidden_dim,
-    #     output_dim=hidden_dim,
-    #     **cfg.predictor,
-    # )
-
-    # action_encoder = Embedder(input_dim=effective_act_dim, emb_dim=embed_dim)
-    
-    # projector = MLP(
-    #     input_dim=hidden_dim,
-    #     output_dim=embed_dim,
-    #     hidden_dim=2048,
-    #     norm_fn=torch.nn.BatchNorm1d,
-    # )
-
-    # predictor_proj = MLP(
-    #     input_dim=hidden_dim,
-    #     output_dim=embed_dim,
-    #     hidden_dim=2048,
-    #     norm_fn=torch.nn.BatchNorm1d,
-    # )
-
     world_model = JEPA(
         raw_encoders=[vision_encoder, proprio_encoder],
         encoder = state_encoder,
@@ -168,55 +131,35 @@ def run(cfg):
                     "loss": f"{total_loss['loss']:.4f}",
                     "pred_loss": f"{total_loss['pred_loss']:.4f}",
                     "action_loss": f"{total_loss['action_loss']:.4f}",
-                    "reg_loss": f"{total_loss['sigreg_loss']:.4f}"
+                    "reg_loss": f"{total_loss['sigreg_loss']:.4f}",
+                    "emb_var": f"{total_loss['emb_var']:.4f}"   
                 }
             )
 
         global_step += 1
-    # data_module = spt.data.DataModule(train=train, val=val)
-    # world_model = spt.Module(
-    #     model = world_model,
-    #     sigreg = SIGReg(**cfg.loss.sigreg.kwargs),
-    #     forward=partial(lejepa_forward, cfg=cfg),
-    #     optim=optimizers,
-    # )
 
-    # ##########################
-    # ##       training       ##
-    # ##########################
-
-    # run_id = cfg.get("subdir") or ""
-    # run_dir = Path(swm.data.utils.get_cache_dir(), run_id)
-
-    # logger = None
-    # if cfg.wandb.enabled:
-    #     logger = WandbLogger(**cfg.wandb.config)
-    #     logger.log_hyperparams(OmegaConf.to_container(cfg))
-
-    # run_dir.mkdir(parents=True, exist_ok=True)
-    # with open(run_dir / "config.yaml", "w") as f:
-    #     OmegaConf.save(cfg, f)
-
-    # object_dump_callback = ModelObjectCallBack(
-    #     dirpath=run_dir, filename=cfg.output_model_name, epoch_interval=1,
-    # )
-
-    # trainer = pl.Trainer(
-    #     **cfg.trainer,
-    #     callbacks=[object_dump_callback],
-    #     num_sanity_val_steps=1,
-    #     logger=logger,
-    #     enable_checkpointing=True,
-    # )
-
-    # manager = spt.Manager(
-    #     trainer=trainer,
-    #     module=world_model,
-    #     data=data_module,
-    #     ckpt_path=run_dir / f"{cfg.output_model_name}_weights.ckpt",
-    # )
-
-    # manager()
+        world_model.eval()
+        val_totals = {}
+        val_count = 0
+        with torch.no_grad():
+            for info in val:
+                info = {k: v.to(device) for k, v in info.items()}
+                info['raw_inputs'] = [info['pixels'], info['proprio']]
+                info['target_actions'] = info['action']
+                info = world_model(info)
+                losses = world_model.cost(info, cfg.loss.sigreg.weight)
+                for k, v in losses.items():
+                    val_totals[k] = val_totals.get(k, 0) + v.item()
+                val_count += 1
+        world_model.train()
+        val_avg = {k: v / val_count for k, v in val_totals.items()}
+        print(
+            f"[Val epoch {epoch}] "
+            f"loss={val_avg['loss']:.4f}  "
+            f"pred={val_avg['pred_loss']:.4f}  "
+            f"reg={val_avg['sigreg_loss']:.4f}  "
+            f"emb_var={val_avg['emb_var']:.4f}"
+        )
     return
 
 
