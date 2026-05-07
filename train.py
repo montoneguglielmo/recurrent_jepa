@@ -1,8 +1,10 @@
 import os
+import itertools
 from functools import partial
 from pathlib import Path
 
 import hydra
+from hydra.core.hydra_config import HydraConfig
 import lightning as pl
 import stable_pretraining as spt
 import stable_worldmodel as swm
@@ -100,6 +102,13 @@ def run(cfg):
             {"params": world_model.parameters(), "lr": cfg.optimizer.lr}
         ]
     )
+
+    hydra_out = Path(HydraConfig.get().runtime.output_dir)
+    ckpt_dir = Path(swm.data.utils.get_cache_dir()) / "outputs" / hydra_out.parts[-2] / hydra_out.parts[-1] / "checkpoints"
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Saving checkpoints to: {ckpt_dir}")
+    best_val_loss = float("inf")
+
     start_epoch = 0
     global_step = 0
     for epoch in range(start_epoch, cfg.optimizer.max_epochs):
@@ -109,7 +118,9 @@ def run(cfg):
             #disable=cfg.logging.get("tqdm_silent", False),
         )
 
-        for info in pbar:
+        limit = cfg.trainer.get("limit_batches", None)
+        batch_iter = itertools.islice(pbar, limit) if limit else pbar
+        for info in batch_iter:
             info = {k: v.to(device) for k, v in info.items()}
             pixels = info['pixels']
             action = info['action']
@@ -142,7 +153,7 @@ def run(cfg):
         val_totals = {}
         val_count = 0
         with torch.no_grad():
-            for info in val:
+            for info in itertools.islice(val, limit) if limit else val:
                 info = {k: v.to(device) for k, v in info.items()}
                 info['raw_inputs'] = [info['pixels'], info['proprio']]
                 info['target_actions'] = info['action']
@@ -160,6 +171,11 @@ def run(cfg):
             f"reg={val_avg['sigreg_loss']:.4f}  "
             f"emb_var={val_avg['emb_var']:.4f}"
         )
+
+        torch.save(world_model, ckpt_dir / f"ckpt_epoch_{epoch:04d}_object.ckpt")
+        if val_avg["loss"] < best_val_loss:
+            best_val_loss = val_avg["loss"]
+            torch.save(world_model, ckpt_dir / "best_object.ckpt")
     return
 
 

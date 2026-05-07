@@ -84,7 +84,7 @@ def run(cfg: DictConfig):
     # -- run evaluation
     policy = cfg.get("policy", "random")
 
-    if policy != "random":
+    if policy == "le-wm":
         model = swm.policy.AutoCostModel(cfg.policy)
         model = model.to("cuda")
         model = model.eval()
@@ -95,9 +95,11 @@ def run(cfg: DictConfig):
         policy = swm.policy.WorldModelPolicy(
             solver=solver, config=config, process=process, transform=transform
         )
-
-    else:
+    elif policy == 'random':
         policy = swm.policy.RandomPolicy()
+    else:
+        # Load model
+        policy = swm.policy.AutoActionableModel(cfg.policy) 
 
     results_path = (
         Path(swm.data.utils.get_cache_dir(), cfg.policy).parent

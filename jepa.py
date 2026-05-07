@@ -1,7 +1,8 @@
 from torch import nn
 import torch
+from stable_worldmodel.policy import BasePolicy
 
-class JEPA(nn.Module):
+class JEPA(nn.Module, BasePolicy):
 
     def __init__(self, raw_encoders, encoder, predictor=None, decoder=None, sigreg=None, classifiers=None):
         super().__init__()
@@ -41,6 +42,44 @@ class JEPA(nn.Module):
         #output["loss"] = output["pred_loss"] + output["action_loss"] + lambd * output["sigreg_loss"]
         output["loss"] = output["pred_loss"] + lambd * output["sigreg_loss"]
         return output
+    
+    def _encode(self, info):
+        raw_inputs = info['raw_inputs']
+        encoder_input = []
+        for raw_input, raw_encoder in zip(raw_inputs, self.raw_encoders):
+            encoder_input.append(raw_encoder(raw_input))
+        encoder_input = torch.cat(encoder_input, axis=2)
+        emb, _ = self.encoder(encoder_input)
+        return emb
+        
+    
+    def get_action(self, info):
+        print('Info inside the get_action')
+        print(info.keys())
+        pixels = info['pixels']
+        proprio = info['proprio']
+        goal_pixels = info['goal']['pixels']
+        
+        current_status = [pixels, proprio]
+        goal = [goal_pixels, ]
+        
+        current_status_enc = self._encode(current_status)
+        goal_enc = self._encode(goal)
+        
+        #Sample from predictor
+        status_list = []
+        status_list.append(current_status_enc)
+        for step in cfg.n_steps:
+            next_status = self.predictor(current_status_enc)
+            status_list.append(next_status)
+            current_status_enc = next_status
+        
+        index_min = F.mse_loss(next_status, goal_enc).argmin()
+        best_next_status = status_list[1][index_min]
+        decoder_input = torch.cat([current_status_enc, best_next_status], dim=2)
+        return self.decoder(decoder_input)
+        
+        
 
             
         
