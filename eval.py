@@ -99,7 +99,10 @@ def run(cfg: DictConfig):
         policy = swm.policy.RandomPolicy()
     else:
         # Load model
-        policy = swm.policy.AutoActionableModel(cfg.policy) 
+        policy = swm.policy.AutoActionableModel(cfg.policy)
+        policy = policy.to("cuda")
+        policy = policy.eval()
+        policy.requires_grad_(False)
 
     results_path = (
         Path(swm.data.utils.get_cache_dir(), cfg.policy).parent
