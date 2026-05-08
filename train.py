@@ -11,8 +11,8 @@ import stable_worldmodel as swm
 import torch
 from torch import nn
 from torch.optim import Adam
-from lightning.pytorch.loggers import WandbLogger
 from omegaconf import OmegaConf, open_dict
+import wandb
 
 from jepa import JEPA
 from module import ARPredictor, Embedder, MLP, SIGReg, CNNNet, TimeWrapper, ConditionalDiffusionPredictor
@@ -58,9 +58,7 @@ def run(cfg):
         num_conv_layers=cfg.encoders.vision_encoder.num_conv_layers, 
         input_size=cfg.img_size)
     vision_encoder = TimeWrapper(vision_encoder)
-    print('vision_encoder output size:', vision_encoder.output_size)
     
-    print('proprio_encoder input:', dataset.get_dim('proprio'))
     proprio_encoder = MLP(input_dim=dataset.get_dim('proprio'),
                           hidden_dim=cfg.encoders.proprio_encoder.hidden_dim,
                           output_dim=cfg.encoders.proprio_encoder.embed_dim
@@ -109,6 +107,19 @@ def run(cfg):
     print(f"Saving checkpoints to: {ckpt_dir}")
     best_val_loss = float("inf")
 
+    if cfg.wandb.enabled:
+        wandb_kwargs = {k: v for k, v in OmegaConf.to_container(cfg.wandb.config, resolve=True).items()
+                        if k != "log_model"}
+        run_dir = ckpt_dir.parent
+        run_dir.mkdir(parents=True, exist_ok=True)
+        run = wandb.init(
+            **wandb_kwargs,
+            dir=str(run_dir),
+            config=OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True),
+        )
+    else:
+        run = None
+
     start_epoch = 0
     global_step = 0
     for epoch in range(start_epoch, cfg.optimizer.max_epochs):
@@ -143,11 +154,15 @@ def run(cfg):
                     "pred_loss": f"{total_loss['pred_loss']:.4f}",
                     "action_loss": f"{total_loss['action_loss']:.4f}",
                     "reg_loss": f"{total_loss['sigreg_loss']:.4f}",
-                    "emb_var": f"{total_loss['emb_var']:.4f}"   
+                    "emb_var": f"{total_loss['emb_var']:.4f}"
                 }
             )
-
-        global_step += 1
+            if run is not None:
+                run.log(
+                    {f"train/{k}": v.item() for k, v in total_loss.items()},
+                    step=global_step,
+                )
+            global_step += 1
 
         world_model.eval()
         val_totals = {}
@@ -171,12 +186,19 @@ def run(cfg):
             f"reg={val_avg['sigreg_loss']:.4f}  "
             f"emb_var={val_avg['emb_var']:.4f}"
         )
+        if run is not None:
+            run.log(
+                {f"val/{k}": v for k, v in val_avg.items()},
+                step=global_step,
+            )
 
         torch.save(world_model, ckpt_dir / f"ckpt_epoch_{epoch:04d}_object.ckpt")
         if val_avg["loss"] < best_val_loss:
             best_val_loss = val_avg["loss"]
             torch.save(world_model, ckpt_dir / "best_object.ckpt")
-    return
+
+    if run is not None:
+        run.finish()
 
 
 if __name__ == "__main__":

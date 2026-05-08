@@ -110,7 +110,6 @@ class JEPA(nn.Module, BasePolicy):
         #print('best_next_status shape', best_next_status.shape)
         decoder_input = torch.cat([current_status_enc, best_next_status], dim=2)  # (50, 1, 800)
         actions = self.decoder(decoder_input)
-        print('actions shape', actions.shape)
         return actions[:, 0, :2]
         
         
