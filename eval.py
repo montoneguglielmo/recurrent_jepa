@@ -104,6 +104,16 @@ def run(cfg: DictConfig):
         policy = policy.eval()
         policy.requires_grad_(False)
 
+        if hasattr(policy, 'set_normalization_stats') and getattr(policy, 'proprio_mean', None) is None:
+            def _scaler_to_stats(scaler):
+                mean = torch.tensor(scaler.mean_, dtype=torch.float32).unsqueeze(0)
+                std  = torch.tensor(scaler.scale_, dtype=torch.float32).unsqueeze(0)
+                return {'mean': mean, 'std': std}
+            policy.set_normalization_stats(
+                proprio_stats=_scaler_to_stats(process['proprio']),
+                action_stats=_scaler_to_stats(process['action']),
+            )
+
     results_path = (
         Path(swm.data.utils.get_cache_dir(), cfg.policy).parent
         if cfg.policy != "random"

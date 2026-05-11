@@ -29,14 +29,16 @@ def run(cfg):
 
     dataset = swm.data.HDF5Dataset(**cfg.data.dataset, transform=None)
     transforms = [get_img_preprocessor(source='pixels', target='pixels', img_size=cfg.img_size)]
-    
+    col_stats = {}
+
     with open_dict(cfg):
         for col in cfg.data.dataset.keys_to_load:
             if col.startswith("pixels"):
                 continue
 
-            normalizer = get_column_normalizer(dataset, col, col)
+            normalizer, stats = get_column_normalizer(dataset, col, col)
             transforms.append(normalizer)
+            col_stats[col] = stats
 
             setattr(cfg.wm, f"{col}_dim", dataset.get_dim(col))
 
@@ -89,7 +91,9 @@ def run(cfg):
         encoder = state_encoder,
         decoder = action_decoder,
         predictor = predictor,
-        sigreg = SIGReg(**cfg.loss.sigreg.kwargs)
+        sigreg = SIGReg(**cfg.loss.sigreg.kwargs),
+        proprio_stats=col_stats.get('proprio'),
+        action_stats=col_stats.get('action'),
     )
 
     world_model = world_model.to(device)

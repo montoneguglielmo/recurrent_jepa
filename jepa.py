@@ -4,13 +4,18 @@ from stable_worldmodel.policy import BasePolicy
 
 class JEPA(nn.Module, BasePolicy):
 
-    def __init__(self, raw_encoders, encoder, predictor=None, decoder=None, sigreg=None, classifiers=None):
+    def __init__(self, raw_encoders, encoder, predictor=None, decoder=None, sigreg=None, classifiers=None, proprio_stats=None, action_stats=None):
         super().__init__()
         self.raw_encoders = nn.ModuleList(raw_encoders)
         self.encoder = encoder
         self.predictor = predictor
         self.decoder = decoder
         self.sigreg = sigreg
+
+        self.register_buffer('proprio_mean', proprio_stats['mean'] if proprio_stats else None)
+        self.register_buffer('proprio_std',  proprio_stats['std']  if proprio_stats else None)
+        self.register_buffer('action_mean',  action_stats['mean']  if action_stats  else None)
+        self.register_buffer('action_std',   action_stats['std']   if action_stats  else None)
     
     def forward(self, info):
         raw_inputs = info['raw_inputs']
@@ -27,8 +32,8 @@ class JEPA(nn.Module, BasePolicy):
         return info
 
     def cost(self, info, lambd):    
-        emb = info['pred_embeddings']
-        tgt_emb = info['embeddings']
+        emb = info['pred_embeddings'][:,:-1]
+        tgt_emb = info['embeddings'][:,1:]
         
         act = info['action']
         tgt_act = info['target_actions'][:,:-1]
@@ -52,6 +57,27 @@ class JEPA(nn.Module, BasePolicy):
         return emb
         
     
+    def set_normalization_stats(self, proprio_stats, action_stats):
+        device = next(self.parameters()).device
+        self.proprio_mean = proprio_stats['mean'].to(device)
+        self.proprio_std  = proprio_stats['std'].to(device)
+        self.action_mean  = action_stats['mean'].to(device)
+        self.action_std   = action_stats['std'].to(device)
+
+    def _preprocess_proprio(self, x):
+        device = next(self.parameters()).device
+        if not isinstance(x, torch.Tensor):
+            x = torch.from_numpy(x)
+        x = x.float().to(device)
+        if self.proprio_mean is not None:
+            x = (x - self.proprio_mean) / self.proprio_std
+        return x
+
+    def _postprocess_action(self, action):
+        if self.action_mean is not None:
+            action = action * self.action_std + self.action_mean
+        return action
+
     def _preprocess_pixels(self, px):
         """numpy (B, T, H, W, C) uint8 -> tensor (B, T, C, H, W) float, ImageNet-normalized."""
         device = next(self.parameters()).device
@@ -64,19 +90,11 @@ class JEPA(nn.Module, BasePolicy):
         return (px - mean) / std
 
     @torch.no_grad()
-    def get_action(self, info, n_samples=30, n_steps=30):
-        device = next(self.parameters()).device
+    def get_action(self, info, n_samples=100, n_steps=10):
         pixels = self._preprocess_pixels(info['pixels'])
         goal_pixels = self._preprocess_pixels(info['goal'])
-
-        proprio = info['proprio']
-        goal_proprio = info['goal_proprio']
-        if not isinstance(proprio, torch.Tensor):
-            proprio = torch.from_numpy(proprio)
-        if not isinstance(goal_proprio, torch.Tensor):
-            goal_proprio = torch.from_numpy(goal_proprio)
-        proprio = proprio.float().to(device)
-        goal_proprio = goal_proprio.float().to(device)
+        proprio = self._preprocess_proprio(info['proprio'])
+        goal_proprio = self._preprocess_proprio(info['goal_proprio'])
 
         current_status = [pixels, proprio]
         goal_status = [goal_pixels, goal_proprio]
@@ -110,7 +128,7 @@ class JEPA(nn.Module, BasePolicy):
         #print('best_next_status shape', best_next_status.shape)
         decoder_input = torch.cat([current_status_enc, best_next_status], dim=2)  # (50, 1, 800)
         actions = self.decoder(decoder_input)
-        return actions[:, 0, :2]
+        return self._postprocess_action(actions[:, 0, :2])
         
         
 

@@ -30,7 +30,8 @@ def get_column_normalizer(dataset, source: str, target: str):
         return ((x - mean) / std).float()
 
     normalizer = dt.transforms.WrapTorchTransform(norm_fn, source=source, target=target)
-    return normalizer
+    stats = {'mean': mean, 'std': std}
+    return normalizer, stats
 
 class ModelObjectCallBack(Callback):
     """Callback to pickle model object after each epoch."""
