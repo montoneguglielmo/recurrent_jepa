@@ -56,47 +56,57 @@ def run(cfg):
     # ##############################
     # ##       model / optim      ##
     # ##############################
-    vision_encoder = CNNNet(
-        num_conv_layers=cfg.encoders.vision_encoder.num_conv_layers, 
-        input_size=cfg.img_size)
-    vision_encoder = TimeWrapper(vision_encoder)
-    
-    proprio_encoder = MLP(input_dim=dataset.get_dim('proprio'),
-                          hidden_dim=cfg.encoders.proprio_encoder.hidden_dim,
-                          output_dim=cfg.encoders.proprio_encoder.embed_dim
-                          )
-    proprio_encoder = TimeWrapper(proprio_encoder)
-    
-    state_encoder = nn.GRU(
-        input_size=vision_encoder.output_size + proprio_encoder.output_size,
-        hidden_size=cfg.encoders.state_encoder.hidden_dim,
-        batch_first=True
-    )
-    
-    predictor = ConditionalDiffusionPredictor(
-        embed_dim  = cfg.encoders.state_encoder.hidden_dim,
-        hidden_dim = cfg.predictor.hidden_dim,
-        num_steps  = cfg.predictor.num_steps,
-        num_layers = cfg.predictor.num_layers,
-    )
-    
-    action_decoder = MLP(input_dim=cfg.encoders.state_encoder.hidden_dim*2,
-                         hidden_dim=cfg.decoder.action_decoder.hidden_dim,
-                         output_dim=10
-                         )
-    action_decoder = TimeWrapper(action_decoder)
+    saved_optimizer_state = None
+    if cfg.get('resume_from', None):
+        print(f"Loading model from checkpoint: {cfg.resume_from}")
+        ckpt = torch.load(cfg.resume_from, map_location=device, weights_only=False)
+        if isinstance(ckpt, dict):
+            world_model = ckpt['model'].to(device)
+            saved_optimizer_state = ckpt.get('optimizer', None)
+        else:
+            world_model = ckpt.to(device)
+    else:
+        vision_encoder = CNNNet(
+            num_conv_layers=cfg.encoders.vision_encoder.num_conv_layers,
+            input_size=cfg.img_size)
+        vision_encoder = TimeWrapper(vision_encoder)
 
-    world_model = JEPA(
-        raw_encoders=[vision_encoder, proprio_encoder],
-        encoder = state_encoder,
-        decoder = action_decoder,
-        predictor = predictor,
-        sigreg = SIGReg(**cfg.loss.sigreg.kwargs),
-        proprio_stats=col_stats.get('proprio'),
-        action_stats=col_stats.get('action'),
-    )
+        proprio_encoder = MLP(input_dim=dataset.get_dim('proprio'),
+                              hidden_dim=cfg.encoders.proprio_encoder.hidden_dim,
+                              output_dim=cfg.encoders.proprio_encoder.embed_dim
+                              )
+        proprio_encoder = TimeWrapper(proprio_encoder)
 
-    world_model = world_model.to(device)
+        state_encoder = nn.GRU(
+            input_size=vision_encoder.output_size + proprio_encoder.output_size,
+            hidden_size=cfg.encoders.state_encoder.hidden_dim,
+            batch_first=True
+        )
+
+        predictor = ConditionalDiffusionPredictor(
+            embed_dim  = cfg.encoders.state_encoder.hidden_dim,
+            hidden_dim = cfg.predictor.hidden_dim,
+            num_steps  = cfg.predictor.num_steps,
+            num_layers = cfg.predictor.num_layers,
+        )
+
+        action_decoder = MLP(input_dim=cfg.encoders.state_encoder.hidden_dim*2,
+                             hidden_dim=cfg.decoder.action_decoder.hidden_dim,
+                             output_dim=10
+                             )
+        action_decoder = TimeWrapper(action_decoder)
+
+        world_model = JEPA(
+            raw_encoders=[vision_encoder, proprio_encoder],
+            encoder = state_encoder,
+            decoder = action_decoder,
+            predictor = predictor,
+            sigreg = SIGReg(**cfg.loss.sigreg.kwargs),
+            proprio_stats=col_stats.get('proprio'),
+            action_stats=col_stats.get('action'),
+        )
+
+        world_model = world_model.to(device)
     world_model.train()
     
     optimizer = Adam(
@@ -104,6 +114,8 @@ def run(cfg):
             {"params": world_model.parameters(), "lr": cfg.optimizer.lr}
         ]
     )
+    if saved_optimizer_state is not None:
+        optimizer.load_state_dict(saved_optimizer_state)
 
     hydra_out = Path(HydraConfig.get().runtime.output_dir)
     ckpt_dir = Path(swm.data.utils.get_cache_dir()) / "outputs" / hydra_out.parts[-2] / hydra_out.parts[-1] / "checkpoints"
@@ -196,7 +208,10 @@ def run(cfg):
                 step=global_step,
             )
 
-        torch.save(world_model, ckpt_dir / f"ckpt_epoch_{epoch:04d}_object.ckpt")
+        torch.save(
+            {'model': world_model, 'optimizer': optimizer.state_dict()},
+            ckpt_dir / f"ckpt_epoch_{epoch:04d}_object.ckpt",
+        )
         if val_avg["loss"] < best_val_loss:
             best_val_loss = val_avg["loss"]
             torch.save(world_model, ckpt_dir / "best_object.ckpt")

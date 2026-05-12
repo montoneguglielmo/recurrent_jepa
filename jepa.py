@@ -90,7 +90,7 @@ class JEPA(nn.Module, BasePolicy):
         return (px - mean) / std
 
     @torch.no_grad()
-    def get_action(self, info, n_samples=100, n_steps=10):
+    def get_action(self, info, n_samples=100, n_steps=2):
         pixels = self._preprocess_pixels(info['pixels'])
         goal_pixels = self._preprocess_pixels(info['goal'])
         proprio = self._preprocess_proprio(info['proprio'])

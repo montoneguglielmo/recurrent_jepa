@@ -4,6 +4,7 @@ defaults:
 
 output_model_name: lewm
 subdir: ${hydra:job.id}
+resume_from: null  # path to a .ckpt file to load weights from; null = train from scratch
 
 num_workers: 6
 train_split: 0.9

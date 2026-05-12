@@ -18,7 +18,7 @@ dataset:
     - state
 
 seed: 42
-policy: outputs/2026-05-10/15-53-14/checkpoints/best # ckpt name or random
+policy: outputs/2026-05-11/15-38-46/checkpoints/best # ckpt name or random
 
 plan_config:
   horizon: 5
