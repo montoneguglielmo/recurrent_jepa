@@ -95,6 +95,17 @@ def run(cfg):
                              output_dim=10
                              )
         action_decoder = TimeWrapper(action_decoder)
+        
+        agent_position_classifier = TimeWrapper(MLP(
+            input_dim=cfg.encoders.state_encoder.hidden_dim,
+            hidden_dim=cfg.encoders.state_encoder.hidden_dim,
+            output_dim=2,
+        ))
+        block_position_classifier = TimeWrapper(MLP(
+            input_dim=cfg.encoders.state_encoder.hidden_dim,
+            hidden_dim=cfg.encoders.state_encoder.hidden_dim,
+            output_dim=3,
+        ))
 
         world_model = JEPA(
             raw_encoders=[vision_encoder, proprio_encoder],
@@ -104,6 +115,7 @@ def run(cfg):
             sigreg = SIGReg(**cfg.loss.sigreg.kwargs),
             proprio_stats=col_stats.get('proprio'),
             action_stats=col_stats.get('action'),
+            classifiers = [agent_position_classifier, block_position_classifier]
         )
 
         world_model = world_model.to(device)
@@ -157,8 +169,10 @@ def run(cfg):
             
             optimizer.zero_grad()
             info = world_model(info)
-            
-            total_loss = world_model.cost(info, cfg.loss.sigreg.weight)
+
+            # state	(7,)	Full state: agent pos (2), block pos (2), block angle (1), agent vel (2)
+            classifiers_targets = [info['state'][:, :, :2], info['state'][:, :, 2:5]]
+            total_loss = world_model.cost(info, cfg.loss.sigreg.weight, classifiers_targets)
             
             total_loss["loss"].backward()
             optimizer.step()
@@ -170,7 +184,8 @@ def run(cfg):
                     "pred_loss": f"{total_loss['pred_loss']:.4f}",
                     "action_loss": f"{total_loss['action_loss']:.4f}",
                     "reg_loss": f"{total_loss['sigreg_loss']:.4f}",
-                    "emb_var": f"{total_loss['emb_var']:.4f}"
+                    "emb_var": f"{total_loss['emb_var']:.4f}",
+                    "cls_loss": f"{total_loss['classifier_loss']:.4f}"
                 }
             )
             if run is not None:
@@ -189,7 +204,8 @@ def run(cfg):
                 info['raw_inputs'] = [info['pixels'], info['proprio']]
                 info['target_actions'] = info['action']
                 info = world_model(info)
-                losses = world_model.cost(info, cfg.loss.sigreg.weight)
+                classifiers_targets = [info['state'][:, :, :2], info['state'][:, :, 2:4]]
+                losses = world_model.cost(info, cfg.loss.sigreg.weight, classifiers_targets)
                 for k, v in losses.items():
                     val_totals[k] = val_totals.get(k, 0) + v.item()
                 val_count += 1

@@ -11,6 +11,7 @@ class JEPA(nn.Module, BasePolicy):
         self.predictor = predictor
         self.decoder = decoder
         self.sigreg = sigreg
+        self.classifiers = nn.ModuleList(classifiers) if classifiers else None
 
         self.register_buffer('proprio_mean', proprio_stats['mean'] if proprio_stats else None)
         self.register_buffer('proprio_std',  proprio_stats['std']  if proprio_stats else None)
@@ -31,21 +32,28 @@ class JEPA(nn.Module, BasePolicy):
         info['action'] = self.decoder(decoder_input)
         return info
 
-    def cost(self, info, lambd):    
+    def cost(self, info, lambd, classifiers_targets=None):
         emb = info['pred_embeddings'][:,:-1]
         tgt_emb = info['embeddings'][:,1:]
-        
+
         act = info['action']
         tgt_act = info['target_actions'][:,:-1]
-    
+
         # LeWM loss
         output = {}
         output["pred_loss"] = (emb - tgt_emb).pow(2).mean()
         output["action_loss"] = (act - tgt_act).pow(2).mean()
-        output["sigreg_loss"]= self.sigreg(emb.transpose(0, 1))
+        output["sigreg_loss"] = self.sigreg(emb.transpose(0, 1))
         output["emb_var"] = info['embeddings'].var(dim=0).mean()
-        output["loss"] = output["pred_loss"] + output["action_loss"] + lambd * output["sigreg_loss"]
-        #output["loss"] = output["pred_loss"] + lambd * output["sigreg_loss"]
+
+        classifier_loss = torch.tensor(0.0, device=emb.device)
+        if self.classifiers is not None and classifiers_targets is not None:
+            emb_cls = info['embeddings'].detach()  # BxTxD — gradients stop here
+            for classifier, target in zip(self.classifiers, classifiers_targets):
+                classifier_loss = classifier_loss + (target - classifier(emb_cls)).pow(2).mean()
+        output["classifier_loss"] = classifier_loss
+
+        output["loss"] = output["pred_loss"] + output["action_loss"] + lambd * output["sigreg_loss"] + classifier_loss
         return output
     
     def _encode(self, raw_inputs):
@@ -90,7 +98,7 @@ class JEPA(nn.Module, BasePolicy):
         return (px - mean) / std
 
     @torch.no_grad()
-    def get_action(self, info, n_samples=100, n_steps=2):
+    def get_action(self, info, n_samples=100, n_steps=0):
         pixels = self._preprocess_pixels(info['pixels'])
         goal_pixels = self._preprocess_pixels(info['goal'])
         proprio = self._preprocess_proprio(info['proprio'])
@@ -106,27 +114,28 @@ class JEPA(nn.Module, BasePolicy):
         #print('goal_enc:', goal_enc.shape)
         
 
-        next_status = torch.cat([self.predictor(current_status_enc) for _ in range(n_samples)], dim=1)
-        #print('next status samples:', next_status.shape)
+        # next_status = torch.cat([self.predictor(current_status_enc) for _ in range(n_samples)], dim=1)
+        # #print('next status samples:', next_status.shape)
         
-        #Sample from predictor
-        next_status_list = []
-        next_status_list.append(next_status)
-        for _ in range(n_steps):
-            next_status = self.predictor(next_status)
-            next_status_list.append(next_status)
+        # #Sample from predictor
+        # next_status_list = []
+        # next_status_list.append(next_status)
+        # for _ in range(n_steps):
+        #     next_status = self.predictor(next_status)
+        #     next_status_list.append(next_status)
             
-        #print('next status after steps:', next_status.shape)
-        #print('goal enc shape:', goal_enc.shape)
+        # #print('next status after steps:', next_status.shape)
+        # #print('goal enc shape:', goal_enc.shape)
         
-        # (50, 30, 400) vs (50, 1, 400) -> mse per condition per sample -> (50, 30)
-        mse_per_sample = (next_status - goal_enc).pow(2).mean(dim=2)
-        index_min = mse_per_sample.argmin(dim=1)  # (50,) — best sample per condition
+        # # (50, 30, 400) vs (50, 1, 400) -> mse per condition per sample -> (50, 30)
+        # mse_per_sample = (next_status - goal_enc).pow(2).mean(dim=2)
+        # index_min = mse_per_sample.argmin(dim=1)  # (50,) — best sample per condition
 
-        idx = index_min.view(-1, 1, 1).expand(-1, 1, next_status_list[0].shape[2])
-        best_next_status = next_status_list[0].gather(1, idx)  # (50, 1, 400)
+        # idx = index_min.view(-1, 1, 1).expand(-1, 1, next_status_list[0].shape[2])
+        # best_next_status = next_status_list[0].gather(1, idx)  # (50, 1, 400)
         #print('best_next_status shape', best_next_status.shape)
-        decoder_input = torch.cat([current_status_enc, best_next_status], dim=2)  # (50, 1, 800)
+        #decoder_input = torch.cat([current_status_enc, best_next_status], dim=2)  # (50, 1, 800)
+        decoder_input = torch.cat([current_status_enc, goal_enc], dim=2)
         actions = self.decoder(decoder_input)
         return self._postprocess_action(actions[:, 0, :2])
         
