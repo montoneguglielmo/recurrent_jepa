@@ -53,7 +53,8 @@ class JEPA(nn.Module, BasePolicy):
                 classifier_loss = classifier_loss + (target - classifier(emb_cls)).pow(2).mean()
         output["classifier_loss"] = classifier_loss
 
-        output["loss"] = output["pred_loss"] + output["action_loss"] + lambd * output["sigreg_loss"] + classifier_loss
+        #output["action_loss"]
+        output["loss"] = output["pred_loss"]  + lambd * output["sigreg_loss"] + classifier_loss
         return output
     
     def _encode(self, raw_inputs):

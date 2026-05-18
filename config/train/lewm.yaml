@@ -53,7 +53,8 @@ wm:
 
 encoders:
   vision_encoder:
-    num_conv_layers: 3
+    num_conv_layers: 5
+    output_size: 192
   proprio_encoder:
     hidden_dim: 100
     embed_dim: 10

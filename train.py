@@ -15,7 +15,7 @@ from omegaconf import OmegaConf, open_dict
 import wandb
 
 from jepa import JEPA
-from module import ARPredictor, Embedder, MLP, SIGReg, CNNNet, TimeWrapper, ConditionalDiffusionPredictor
+from module import ARPredictor, Embedder, MLP, SIGReg, CNNNet, TimeWrapper, ConditionalDiffusionPredictor, vit_tiny
 from utils import get_column_normalizer, get_img_preprocessor, ModelObjectCallBack, setup_device
 from tqdm import tqdm
 
@@ -66,9 +66,10 @@ def run(cfg):
         else:
             world_model = ckpt.to(device)
     else:
-        vision_encoder = CNNNet(
-            num_conv_layers=cfg.encoders.vision_encoder.num_conv_layers,
-            input_size=cfg.img_size)
+        # vision_encoder = CNNNet(
+        #     num_conv_layers=cfg.encoders.vision_encoder.num_conv_layers,
+        #     input_size=cfg.img_size)
+        vision_encoder = vit_tiny(output_size=cfg.encoders.vision_encoder.output_size)
         vision_encoder = TimeWrapper(vision_encoder)
 
         proprio_encoder = MLP(input_dim=dataset.get_dim('proprio'),
@@ -103,7 +104,7 @@ def run(cfg):
         ))
         block_position_classifier = TimeWrapper(MLP(
             input_dim=cfg.encoders.state_encoder.hidden_dim,
-            hidden_dim=cfg.encoders.state_encoder.hidden_dim,
+            hidden_dim=cfg.encoders.state_encoder.hidden_dim * 5,
             output_dim=3,
         ))
 
@@ -181,11 +182,11 @@ def run(cfg):
             pbar.set_postfix(
                 {
                     "loss": f"{total_loss['loss']:.4f}",
-                    "pred_loss": f"{total_loss['pred_loss']:.4f}",
-                    "action_loss": f"{total_loss['action_loss']:.4f}",
-                    "reg_loss": f"{total_loss['sigreg_loss']:.4f}",
-                    "emb_var": f"{total_loss['emb_var']:.4f}",
-                    "cls_loss": f"{total_loss['classifier_loss']:.4f}"
+                    "pred": f"{total_loss['pred_loss']:.4f}",
+                    "act": f"{total_loss['action_loss']:.4f}",
+                    "reg": f"{total_loss['sigreg_loss']:.4f}",
+                    "var": f"{total_loss['emb_var']:.4f}",
+                    "cls": f"{total_loss['classifier_loss']:.4f}",
                 }
             )
             if run is not None:
@@ -204,7 +205,7 @@ def run(cfg):
                 info['raw_inputs'] = [info['pixels'], info['proprio']]
                 info['target_actions'] = info['action']
                 info = world_model(info)
-                classifiers_targets = [info['state'][:, :, :2], info['state'][:, :, 2:4]]
+                classifiers_targets = [info['state'][:, :, :2], info['state'][:, :, 2:5]]
                 losses = world_model.cost(info, cfg.loss.sigreg.weight, classifiers_targets)
                 for k, v in losses.items():
                     val_totals[k] = val_totals.get(k, 0) + v.item()
@@ -214,9 +215,11 @@ def run(cfg):
         print(
             f"[Val epoch {epoch}] "
             f"loss={val_avg['loss']:.4f}  "
-            f"pred={val_avg['pred_loss']:.4f}  "
-            f"reg={val_avg['sigreg_loss']:.4f}  "
-            f"emb_var={val_avg['emb_var']:.4f}"
+            f"pred={val_avg['pred_loss']:.4f} "
+            f"act={val_avg['action_loss']:.4f}  "
+            f"reg={val_avg['sigreg_loss']:.4f} "
+            f"var={val_avg['emb_var']:.4f} "
+            f"cls={val_avg['classifier_loss']:.4f}"
         )
         if run is not None:
             run.log(
