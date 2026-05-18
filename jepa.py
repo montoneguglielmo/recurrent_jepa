@@ -4,7 +4,18 @@ from stable_worldmodel.policy import BasePolicy
 
 class JEPA(nn.Module, BasePolicy):
 
-    def __init__(self, raw_encoders, encoder, predictor=None, decoder=None, sigreg=None, classifiers=None, proprio_stats=None, action_stats=None):
+    def __init__(
+        self, 
+        raw_encoders, 
+        encoder, 
+        predictor=None, 
+        decoder=None, 
+        sigreg=None, 
+        classifiers=None, 
+        proprio_stats=None, 
+        action_stats=None, 
+        train_action_decoder=False):
+        
         super().__init__()
         self.raw_encoders = nn.ModuleList(raw_encoders)
         self.encoder = encoder
@@ -12,6 +23,7 @@ class JEPA(nn.Module, BasePolicy):
         self.decoder = decoder
         self.sigreg = sigreg
         self.classifiers = nn.ModuleList(classifiers) if classifiers else None
+        self.train_action_decoder = train_action_decoder
 
         self.register_buffer('proprio_mean', proprio_stats['mean'] if proprio_stats else None)
         self.register_buffer('proprio_std',  proprio_stats['std']  if proprio_stats else None)
@@ -28,23 +40,27 @@ class JEPA(nn.Module, BasePolicy):
         info['pred_embeddings'] = self.predictor(info['embeddings'])
         
         # info['embeddings'] BxTxD
-        decoder_input = torch.cat([info['embeddings'][:, :-1], info['embeddings'][:, 1:]], dim=2)
-        info['action'] = self.decoder(decoder_input)
+        if self.train_action_decoder:
+            decoder_input = torch.cat([info['embeddings'][:, :-1], info['embeddings'][:, 1:]], dim=2)
+            info['action'] = self.decoder(decoder_input)
         return info
 
     def cost(self, info, lambd, classifiers_targets=None):
         emb = info['pred_embeddings'][:,:-1]
         tgt_emb = info['embeddings'][:,1:]
 
-        act = info['action']
-        tgt_act = info['target_actions'][:,:-1]
+        if self.train_action_decoder:
+            act = info['action']
+            tgt_act = info['target_actions'][:,:-1]
 
         # LeWM loss
         output = {}
         output["pred_loss"] = (emb - tgt_emb).pow(2).mean()
-        output["action_loss"] = (act - tgt_act).pow(2).mean()
         output["sigreg_loss"] = self.sigreg(emb.transpose(0, 1))
         output["emb_var"] = info['embeddings'].var(dim=0).mean()
+
+        if self.train_action_decoder:
+            output["action_loss"] = (act - tgt_act).pow(2).mean()
 
         classifier_loss = torch.tensor(0.0, device=emb.device)
         if self.classifiers is not None and classifiers_targets is not None:
@@ -53,8 +69,10 @@ class JEPA(nn.Module, BasePolicy):
                 classifier_loss = classifier_loss + (target - classifier(emb_cls)).pow(2).mean()
         output["classifier_loss"] = classifier_loss
 
-        #output["action_loss"]
-        output["loss"] = output["pred_loss"]  + lambd * output["sigreg_loss"] + classifier_loss
+        if self.train_action_decoder:
+            output["loss"] = output["loss"] = output["pred_loss"] + output["action_loss"] + lambd * output["sigreg_loss"] + classifier_loss
+        else:
+            output["loss"] = output["pred_loss"]  + lambd * output["sigreg_loss"] + classifier_loss
         return output
     
     def _encode(self, raw_inputs):

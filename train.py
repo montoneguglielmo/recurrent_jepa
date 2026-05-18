@@ -179,16 +179,16 @@ def run(cfg):
             optimizer.step()
 
             # Update progress bar
-            pbar.set_postfix(
-                {
-                    "loss": f"{total_loss['loss']:.4f}",
-                    "pred": f"{total_loss['pred_loss']:.4f}",
-                    "act": f"{total_loss['action_loss']:.4f}",
-                    "reg": f"{total_loss['sigreg_loss']:.4f}",
-                    "var": f"{total_loss['emb_var']:.4f}",
-                    "cls": f"{total_loss['classifier_loss']:.4f}",
-                }
-            )
+            postfix = {
+                "loss": f"{total_loss['loss']:.4f}",
+                "pred": f"{total_loss['pred_loss']:.4f}",
+                "reg": f"{total_loss['sigreg_loss']:.4f}",
+                "var": f"{total_loss['emb_var']:.4f}",
+                "cls": f"{total_loss['classifier_loss']:.4f}",
+            }
+            if "action_loss" in total_loss:
+                postfix["act"] = f"{total_loss['action_loss']:.4f}"
+            pbar.set_postfix(postfix)
             if run is not None:
                 run.log(
                     {f"train/{k}": v.item() for k, v in total_loss.items()},
@@ -212,15 +212,19 @@ def run(cfg):
                 val_count += 1
         world_model.train()
         val_avg = {k: v / val_count for k, v in val_totals.items()}
-        print(
+        val_msg = (
             f"[Val epoch {epoch}] "
             f"loss={val_avg['loss']:.4f}  "
             f"pred={val_avg['pred_loss']:.4f} "
-            f"act={val_avg['action_loss']:.4f}  "
+        )
+        if "action_loss" in val_avg:
+            val_msg += f"act={val_avg['action_loss']:.4f}  "
+        val_msg += (
             f"reg={val_avg['sigreg_loss']:.4f} "
             f"var={val_avg['emb_var']:.4f} "
             f"cls={val_avg['classifier_loss']:.4f}"
         )
+        print(val_msg)
         if run is not None:
             run.log(
                 {f"val/{k}": v for k, v in val_avg.items()},
