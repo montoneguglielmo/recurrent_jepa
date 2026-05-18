@@ -1,0 +1,22 @@
+program: train.py
+method: bayes
+metric:
+  name: val/loss
+  goal: minimize
+parameters:
+  optimizer.lr:
+    distribution: log_uniform_values
+    min: 1e-6
+    max: 1e-4
+  optimizer.weight_decay:
+    distribution: log_uniform_values
+    min: 1e-4
+    max: 1e-2
+  loader.batch_size:
+    values: [64, 128, 256]
+  loss.sigreg.weight:
+    distribution: log_uniform_values
+    min: 0.001
+    max: 0.1
+  classifiers.block_classifier.hidden_dim:
+    values: [500, 1000, 2000]

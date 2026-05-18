@@ -73,6 +73,12 @@ predictor:
   num_steps: 100
   num_layers: 4
 
+classifiers:
+  block_classifier:
+    hidden_dim: 1600
+  agent_classifier:
+    hidden_dim: 400
+
 loss:
   sigreg:
     weight: 0.01

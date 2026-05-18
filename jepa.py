@@ -36,7 +36,7 @@ class JEPA(nn.Module, BasePolicy):
         for raw_input, raw_encoder in zip(raw_inputs, self.raw_encoders):
             encoder_input.append(raw_encoder(raw_input))
         encoder_input = torch.cat(encoder_input, axis=2)
-        info['embeddings'], _ = self.encoder(encoder_input)
+        info['embeddings'] = self.encoder(encoder_input)
         info['pred_embeddings'] = self.predictor(info['embeddings'])
         
         # info['embeddings'] BxTxD

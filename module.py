@@ -228,16 +228,20 @@ class MLP(nn.Module):
         output_dim=None,
         norm_fn=nn.LayerNorm,
         act_fn=nn.GELU,
+        output_bn=False,
     ):
         super().__init__()
         norm_fn = norm_fn(hidden_dim) if norm_fn is not None else nn.Identity()
+        out_dim = output_dim or input_dim
+        output_norm = nn.BatchNorm1d(out_dim) if output_bn else nn.Identity()
         self.net = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             norm_fn,
             act_fn(),
-            nn.Linear(hidden_dim, output_dim or input_dim),
+            nn.Linear(hidden_dim, out_dim),
+            output_norm,
         )
-        self.output_size = output_dim or input_dim
+        self.output_size = out_dim
 
     def forward(self, x):
         """

@@ -21,6 +21,20 @@ from tqdm import tqdm
 
 @hydra.main(version_base=None, config_path="./config/train", config_name="lewm")
 def run(cfg):
+    if cfg.wandb.enabled:
+        wandb_kwargs = {k: v for k, v in OmegaConf.to_container(cfg.wandb.config, resolve=True).items()
+                        if k != "log_model"}
+        run = wandb.init(
+            **wandb_kwargs,
+            config=OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True),
+        )
+        # Override Hydra cfg with sweep values
+        with open_dict(cfg):
+            for key, value in wandb.config.items():
+                OmegaConf.update(cfg, key, value)
+    else:
+        run = None
+
     #########################
     ##       dataset       ##
     #########################
@@ -80,11 +94,20 @@ def run(cfg):
                               )
         proprio_encoder = TimeWrapper(proprio_encoder)
 
-        state_encoder = nn.GRU(
-            input_size=vision_encoder.output_size + proprio_encoder.output_size,
-            hidden_size=cfg.encoders.state_encoder.hidden_dim,
-            batch_first=True
+        #state_encoder = nn.GRU(
+        #    input_size=vision_encoder.output_size + proprio_encoder.output_size,
+        #    hidden_size=cfg.encoders.state_encoder.hidden_dim,
+        #    batch_first=True
+        #)
+        state_encoder = MLP(
+            input_dim=vision_encoder.output_size + proprio_encoder.output_size,
+            hidden_dim=cfg.encoders.state_encoder.hidden_dim,
+            output_dim=cfg.encoders.state_encoder.hidden_dim,
+            output_bn=True
         )
+        state_encoder = TimeWrapper(state_encoder)
+
+        
 
         predictor = ConditionalDiffusionPredictor(
             embed_dim  = cfg.encoders.state_encoder.hidden_dim,
@@ -101,12 +124,12 @@ def run(cfg):
         
         agent_position_classifier = TimeWrapper(MLP(
             input_dim=cfg.encoders.state_encoder.hidden_dim,
-            hidden_dim=cfg.encoders.state_encoder.hidden_dim,
+            hidden_dim=cfg.classifiers.agent_classifier.hidden_dim,
             output_dim=2,
         ))
         block_position_classifier = TimeWrapper(MLP(
             input_dim=cfg.encoders.state_encoder.hidden_dim,
-            hidden_dim=cfg.encoders.state_encoder.hidden_dim * 5,
+            hidden_dim=cfg.classifiers.block_classifier.hidden_dim,
             output_dim=3,
         ))
 
@@ -144,19 +167,6 @@ def run(cfg):
     print(f"Saving checkpoints to: {ckpt_dir}")
     best_val_loss = float("inf")
 
-    if cfg.wandb.enabled:
-        wandb_kwargs = {k: v for k, v in OmegaConf.to_container(cfg.wandb.config, resolve=True).items()
-                        if k != "log_model"}
-        run_dir = ckpt_dir.parent
-        run_dir.mkdir(parents=True, exist_ok=True)
-        run = wandb.init(
-            **wandb_kwargs,
-            dir=str(run_dir),
-            config=OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True),
-        )
-    else:
-        run = None
-
     start_epoch = 0
     for epoch in range(start_epoch, cfg.optimizer.max_epochs):
         pbar = tqdm(
@@ -175,18 +185,17 @@ def run(cfg):
             info['raw_inputs'] = [pixels, proprio]
             info['target_actions'] = action
             
-            train_classifiers = global_step >= cfg.optimizer.classifier_start_iter
             optimizer.zero_grad()
             classifier_optimizer.zero_grad()
             info = world_model(info)
 
             # state	(7,)	Full state: agent pos (2), block pos (2), block angle (1), agent vel (2)
-            classifiers_targets = [info['state'][:, :, :2], info['state'][:, :, 2:5]] if train_classifiers else None
+            classifiers_targets = [info['state'][:, :, :2], info['state'][:, :, 2:5]]
             total_loss = world_model.cost(info, cfg.loss.sigreg.weight, classifiers_targets)
 
             total_loss["loss"].backward()
             optimizer.step()
-            if train_classifiers:
+            if global_step >= cfg.optimizer.classifier_start_iter:
                 classifier_optimizer.step()
 
             # Update progress bar
