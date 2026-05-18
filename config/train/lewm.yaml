@@ -33,6 +33,8 @@ optimizer:
   lr: 1e-5
   weight_decay: 1e-3
   max_epochs: 100
+  classifier_lr: 1e-4
+  classifier_start_iter: 10000
  
 
 wandb:

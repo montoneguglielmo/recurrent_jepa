@@ -56,6 +56,7 @@ def run(cfg):
     # ##############################
     # ##       model / optim      ##
     # ##############################
+    global_step = 0
     saved_optimizer_state = None
     if cfg.get('resume_from', None):
         print(f"Loading model from checkpoint: {cfg.resume_from}")
@@ -63,6 +64,7 @@ def run(cfg):
         if isinstance(ckpt, dict):
             world_model = ckpt['model'].to(device)
             saved_optimizer_state = ckpt.get('optimizer', None)
+            global_step = ckpt.get('global_step', 0)
         else:
             world_model = ckpt.to(device)
     else:
@@ -122,13 +124,19 @@ def run(cfg):
         world_model = world_model.to(device)
     world_model.train()
     
-    optimizer = Adam(
-        [
-            {"params": world_model.parameters(), "lr": cfg.optimizer.lr}
-        ]
-    )
+    classifier_param_ids = {id(p) for p in world_model.classifiers.parameters()}
+    main_params = [p for p in world_model.parameters() if id(p) not in classifier_param_ids]
+    optimizer = Adam([{"params": main_params, "lr": cfg.optimizer.lr}])
+    classifier_optimizer = Adam([
+        {"params": world_model.classifiers.parameters(), "lr": cfg.optimizer.classifier_lr}
+    ])
     if saved_optimizer_state is not None:
-        optimizer.load_state_dict(saved_optimizer_state)
+        if isinstance(saved_optimizer_state, dict) and 'main' in saved_optimizer_state:
+            optimizer.load_state_dict(saved_optimizer_state['main'])
+            if 'classifier' in saved_optimizer_state:
+                classifier_optimizer.load_state_dict(saved_optimizer_state['classifier'])
+        else:
+            optimizer.load_state_dict(saved_optimizer_state)
 
     hydra_out = Path(HydraConfig.get().runtime.output_dir)
     ckpt_dir = Path(swm.data.utils.get_cache_dir()) / "outputs" / hydra_out.parts[-2] / hydra_out.parts[-1] / "checkpoints"
@@ -150,7 +158,6 @@ def run(cfg):
         run = None
 
     start_epoch = 0
-    global_step = 0
     for epoch in range(start_epoch, cfg.optimizer.max_epochs):
         pbar = tqdm(
             train,
@@ -168,15 +175,19 @@ def run(cfg):
             info['raw_inputs'] = [pixels, proprio]
             info['target_actions'] = action
             
+            train_classifiers = global_step >= cfg.optimizer.classifier_start_iter
             optimizer.zero_grad()
+            classifier_optimizer.zero_grad()
             info = world_model(info)
 
             # state	(7,)	Full state: agent pos (2), block pos (2), block angle (1), agent vel (2)
-            classifiers_targets = [info['state'][:, :, :2], info['state'][:, :, 2:5]]
+            classifiers_targets = [info['state'][:, :, :2], info['state'][:, :, 2:5]] if train_classifiers else None
             total_loss = world_model.cost(info, cfg.loss.sigreg.weight, classifiers_targets)
-            
+
             total_loss["loss"].backward()
             optimizer.step()
+            if train_classifiers:
+                classifier_optimizer.step()
 
             # Update progress bar
             postfix = {
@@ -232,7 +243,14 @@ def run(cfg):
             )
 
         torch.save(
-            {'model': world_model, 'optimizer': optimizer.state_dict()},
+            {
+                'model': world_model,
+                'optimizer': {
+                    'main': optimizer.state_dict(),
+                    'classifier': classifier_optimizer.state_dict(),
+                },
+                'global_step': global_step,
+            },
             ckpt_dir / f"ckpt_epoch_{epoch:04d}_object.ckpt",
         )
         if val_avg["loss"] < best_val_loss:
