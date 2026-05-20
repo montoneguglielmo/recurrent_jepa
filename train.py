@@ -141,7 +141,8 @@ def run(cfg):
             sigreg = SIGReg(**cfg.loss.sigreg.kwargs),
             proprio_stats=col_stats.get('proprio'),
             action_stats=col_stats.get('action'),
-            classifiers = [agent_position_classifier, block_position_classifier]
+            classifiers = [agent_position_classifier, block_position_classifier],
+            train_action_decoder=cfg.trainer.train_action_decoder
         )
 
         world_model = world_model.to(device)

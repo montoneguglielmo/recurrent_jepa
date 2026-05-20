@@ -128,31 +128,30 @@ class JEPA(nn.Module, BasePolicy):
         
         current_status_enc = self._encode(current_status)
         goal_enc = self._encode(goal_status)
-        
-        #print('current_status_enc:', current_status_enc.shape)
-        #print('goal_enc:', goal_enc.shape)
-        
 
-        # next_status = torch.cat([self.predictor(current_status_enc) for _ in range(n_samples)], dim=1)
-        # #print('next status samples:', next_status.shape)
-        
-        # #Sample from predictor
-        # next_status_list = []
-        # next_status_list.append(next_status)
-        # for _ in range(n_steps):
-        #     next_status = self.predictor(next_status)
-        #     next_status_list.append(next_status)
-            
-        # #print('next status after steps:', next_status.shape)
-        # #print('goal enc shape:', goal_enc.shape)
-        
-        # # (50, 30, 400) vs (50, 1, 400) -> mse per condition per sample -> (50, 30)
-        # mse_per_sample = (next_status - goal_enc).pow(2).mean(dim=2)
-        # index_min = mse_per_sample.argmin(dim=1)  # (50,) — best sample per condition
+        # Initial n_samples predictions: B x n_samples x D
+        next_status = torch.stack(
+            [self.predictor(current_status_enc) for _ in range(n_samples)], dim=1
+            )
+        first_step = next_status  # save for later selection
 
-        # idx = index_min.view(-1, 1, 1).expand(-1, 1, next_status_list[0].shape[2])
-        # best_next_status = next_status_list[0].gather(1, idx)  # (50, 1, 400)
-        #print('best_next_status shape', best_next_status.shape)
+        # Roll forward n_steps, predicting each sample independently
+        for _ in range(n_steps):
+            B, S, D = next_status.shape
+            # flatten to (B*n_samples, D), predict, reshape back
+            next_status = self.predictor(next_status.view(B * S, D)).view(B, S, D)
+
+        # next_status is now the final state after n_steps: B x n_samples x D
+        # goal_enc is B x D, expand to compare
+        mse_per_sample = (next_status - goal_enc.unsqueeze(1)).pow(2).mean(dim=2)  # B x n_samples
+
+        # Best sample per batch element
+        index_min = mse_per_sample.argmin(dim=1)  # (B,)
+
+        # Gather the first-step prediction for the best sample
+        idx = index_min.view(-1, 1, 1).expand(-1, 1, D)
+        best_next_status = first_step.gather(1, idx).squeeze(1)  # B x D
+    
         #decoder_input = torch.cat([current_status_enc, best_next_status], dim=2)  # (50, 1, 800)
         decoder_input = torch.cat([current_status_enc, goal_enc], dim=2)
         actions = self.decoder(decoder_input)

@@ -20,6 +20,7 @@ trainer:
   precision: bf16
   gradient_clip_val: 1.0
   limit_batches: null
+  train_action_decoder: True
 
 loader:
   batch_size: 128
@@ -75,7 +76,7 @@ predictor:
 
 classifiers:
   block_classifier:
-    hidden_dim: 1600
+    hidden_dim: 2000
   agent_classifier:
     hidden_dim: 400
 
