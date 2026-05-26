@@ -15,7 +15,7 @@ from omegaconf import OmegaConf, open_dict
 import wandb
 
 from jepa import JEPA
-from module import ARPredictor, Embedder, MLP, SIGReg, CNNNet, TimeWrapper, ConditionalDiffusionPredictor, vit_tiny
+from module import MLP, SIGReg, CNNNet, TimeWrapper, ConditionalDiffusionPredictor, vit_tiny
 from utils import get_column_normalizer, get_img_preprocessor, ModelObjectCallBack, setup_device
 from tqdm import tqdm
 
@@ -82,9 +82,6 @@ def run(cfg):
         else:
             world_model = ckpt.to(device)
     else:
-        # vision_encoder = CNNNet(
-        #     num_conv_layers=cfg.encoders.vision_encoder.num_conv_layers,
-        #     input_size=cfg.img_size)
         vision_encoder = vit_tiny(output_size=cfg.encoders.vision_encoder.output_size)
         vision_encoder = TimeWrapper(vision_encoder)
 
@@ -94,11 +91,6 @@ def run(cfg):
                               )
         proprio_encoder = TimeWrapper(proprio_encoder)
 
-        #state_encoder = nn.GRU(
-        #    input_size=vision_encoder.output_size + proprio_encoder.output_size,
-        #    hidden_size=cfg.encoders.state_encoder.hidden_dim,
-        #    batch_first=True
-        #)
         state_encoder = MLP(
             input_dim=vision_encoder.output_size + proprio_encoder.output_size,
             hidden_dim=cfg.encoders.state_encoder.hidden_dim,

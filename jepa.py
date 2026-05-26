@@ -121,7 +121,7 @@ class JEPA(nn.Module, BasePolicy):
         return (px - mean) / std
 
     @torch.no_grad()
-    def get_action(self, info, n_samples=10, n_steps=5):
+    def get_action(self, info, n_samples=50, n_steps=5):
         
         if not getattr(self, '_action_buffer', None):
             self._action_buffer = deque()
