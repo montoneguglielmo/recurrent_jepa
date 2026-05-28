@@ -3,6 +3,7 @@ from collections import deque
 from torch import nn
 import torch
 from stable_worldmodel.policy import BasePolicy
+from utils import CEM, diffusion_sample_with_noise
 
 class JEPA(nn.Module, BasePolicy):
 
@@ -121,7 +122,7 @@ class JEPA(nn.Module, BasePolicy):
         return (px - mean) / std
 
     @torch.no_grad()
-    def get_action(self, info, n_samples=50, n_steps=5):
+    def get_action_old(self, info, n_samples=50, n_steps=5):
         
         if not getattr(self, '_action_buffer', None):
             self._action_buffer = deque()
@@ -177,6 +178,110 @@ class JEPA(nn.Module, BasePolicy):
     
     def reset(self):
         self._action_buffer = deque()
+        
+    @torch.no_grad()
+    def get_action(
+        self,
+        info,
+        # CEM hyperparameters
+        n_samples: int = 100,
+        n_elite: int = 10,
+        n_cem_iters: int = 5,
+        planning_horizon: int = 5,
+        init_std: float = 1.0,
+    ):
+        """
+        CEM-based policy for JEPA with a diffusion predictor.
+    
+        Instead of sampling n trajectories independently and picking the best,
+        this uses CEM to iteratively refine the diffusion noise vectors that
+        produce the best goal-reaching trajectory.
+        """
+        if not getattr(self, '_action_buffer', None):
+            self._action_buffer = deque()
+    
+        if len(self._action_buffer) > 0:
+            return self._postprocess_action(self._action_buffer.popleft())
+    
+        # ── Encode current & goal ──
+        pixels = self._preprocess_pixels(info['pixels'])
+        goal_pixels = self._preprocess_pixels(info['goal'])
+        proprio = self._preprocess_proprio(info['proprio'])
+        goal_proprio = self._preprocess_proprio(info['goal_proprio'])
+    
+        current_enc = self._encode([pixels, proprio])        # (B, 1, D)
+        goal_enc = self._encode([goal_pixels, goal_proprio]) # (B, 1, D)
+    
+        B, T_enc, D = current_enc.shape
+        device = current_enc.device
+        num_steps = self.predictor.num_steps  # diffusion steps
+    
+        # ── Noise shape for one prediction step ──
+        # Each diffusion sample needs (num_steps, T_enc, D) noise vectors.
+        # Over planning_horizon steps, total noise dim = planning_horizon * num_steps * T_enc * D
+        noise_dim_per_step = num_steps * T_enc * D
+        total_noise_dim = planning_horizon * noise_dim_per_step
+    
+        # ── CEM cost function ──
+        # z: (n_samples, total_noise_dim) -> costs: (n_samples,)
+        def cost_fn(z):
+            # Reshape z into per-horizon-step noise sequences
+            z = z.view(z.shape[0], planning_horizon, num_steps, T_enc, D)
+    
+            costs = torch.zeros(z.shape[0], device=device)
+    
+            for sample_idx in range(z.shape[0]):
+                # Rollout one trajectory
+                state = current_enc  # (B, T_enc, D) — B is typically 1 at inference
+    
+                all_states = [state]
+                for h in range(planning_horizon):
+                    # noise_sequence for this step: (B, num_steps, T_enc, D)
+                    noise_seq = z[sample_idx, h].unsqueeze(0).expand(B, -1, -1, -1)
+                    state = diffusion_sample_with_noise(self.predictor, state, noise_seq)
+                    all_states.append(state)
+    
+                # Stack: (B, planning_horizon+1, T_enc, D)
+                trajectory = torch.stack(all_states, dim=1)
+    
+                # Cost: minimum distance to goal across the trajectory
+                # goal_enc: (B, 1, D) -> (B, 1, 1, D) for broadcasting
+                goal_expanded = goal_enc.unsqueeze(1)
+                mse = (trajectory - goal_expanded).pow(2).mean(dim=-1)  # (B, H+1, T_enc)
+                mse = mse.mean(dim=-1)  # (B, H+1)
+    
+                # Use minimum MSE along trajectory (so it rewards passing through goal)
+                min_mse = mse.min(dim=1).values  # (B,)
+                costs[sample_idx] = min_mse.mean()  # mean over batch
+    
+            return costs
+    
+        # ── Run CEM ──
+        cem = CEM(
+            dim=total_noise_dim,
+            n_samples=n_samples,
+            n_elite=n_elite,
+            n_iters=n_cem_iters,
+            init_std=init_std,
+            device=device,
+        )
+    
+        best_z, _, _ = cem.optimize(cost_fn)
+    
+        # ── Execute best noise: get the first next-state prediction ──
+        best_z = best_z.view(planning_horizon, num_steps, T_enc, D)
+        noise_seq = best_z[0].unsqueeze(0).expand(B, -1, -1, -1)
+        best_next_state = diffusion_sample_with_noise(self.predictor, current_enc, noise_seq)
+    
+        # ── Decode action ──
+        decoder_input = torch.cat([current_enc, best_next_state], dim=2)
+        actions = self.decoder(decoder_input)
+    
+        # Buffer the action chunks (matching your original chunking logic)
+        for t in range(5):
+            self._action_buffer.append(actions[:, 0, 2 * t : 2 * t + 2])
+    
+        return self._postprocess_action(self._action_buffer.popleft())
         
         
 
