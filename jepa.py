@@ -184,8 +184,8 @@ class JEPA(nn.Module, BasePolicy):
         self,
         info,
         # CEM hyperparameters
-        n_samples: int = 100,
-        n_elite: int = 10,
+        n_samples: int = 150,
+        n_elite: int = 30,
         n_cem_iters: int = 5,
         planning_horizon: int = 5,
         init_std: float = 1.0,
@@ -197,6 +197,7 @@ class JEPA(nn.Module, BasePolicy):
         this uses CEM to iteratively refine the diffusion noise vectors that
         produce the best goal-reaching trajectory.
         """
+        print('Running get_action')
         if not getattr(self, '_action_buffer', None):
             self._action_buffer = deque()
     
@@ -220,40 +221,33 @@ class JEPA(nn.Module, BasePolicy):
         # Each diffusion sample needs (num_steps, T_enc, D) noise vectors.
         # Over planning_horizon steps, total noise dim = planning_horizon * num_steps * T_enc * D
         noise_dim_per_step = num_steps * T_enc * D
-        total_noise_dim = planning_horizon * noise_dim_per_step
+        total_noise_dim = B * planning_horizon * noise_dim_per_step  #
     
         # ── CEM cost function ──
         # z: (n_samples, total_noise_dim) -> costs: (n_samples,)
         def cost_fn(z):
-            # Reshape z into per-horizon-step noise sequences
-            z = z.view(z.shape[0], planning_horizon, num_steps, T_enc, D)
-    
-            costs = torch.zeros(z.shape[0], device=device)
-    
-            for sample_idx in range(z.shape[0]):
-                # Rollout one trajectory
-                state = current_enc  # (B, T_enc, D) — B is typically 1 at inference
-    
-                all_states = [state]
-                for h in range(planning_horizon):
-                    # noise_sequence for this step: (B, num_steps, T_enc, D)
-                    noise_seq = z[sample_idx, h].unsqueeze(0).expand(B, -1, -1, -1)
-                    state = diffusion_sample_with_noise(self.predictor, state, noise_seq)
-                    all_states.append(state)
-    
-                # Stack: (B, planning_horizon+1, T_enc, D)
-                trajectory = torch.stack(all_states, dim=1)
-    
-                # Cost: minimum distance to goal across the trajectory
-                # goal_enc: (B, 1, D) -> (B, 1, 1, D) for broadcasting
-                goal_expanded = goal_enc.unsqueeze(1)
-                mse = (trajectory - goal_expanded).pow(2).mean(dim=-1)  # (B, H+1, T_enc)
-                mse = mse.mean(dim=-1)  # (B, H+1)
-    
-                # Use minimum MSE along trajectory (so it rewards passing through goal)
-                min_mse = mse.min(dim=1).values  # (B,)
-                costs[sample_idx] = min_mse.mean()  # mean over batch
-    
+            n_samples = z.shape[0]
+            
+            # z is freshly sampled so .view is fine here
+            z = z.view(n_samples, B, planning_horizon, num_steps, T_enc, D)
+
+            # .expand() creates non-contiguous tensor → use .reshape() or .expand(...).contiguous()
+            state = current_enc.unsqueeze(0).expand(n_samples, -1, -1, -1).contiguous()  # (n_samples, B, T_enc, D)
+
+            costs = torch.zeros(n_samples, device=device)
+
+            for h in range(planning_horizon):
+                noise_seq = z[:, :, h].reshape(n_samples * B, num_steps, T_enc, D)  # ← reshape
+                state_flat = state.reshape(n_samples * B, T_enc, D)                  # ← reshape
+
+                next_state_flat = diffusion_sample_with_noise(self.predictor, state_flat, noise_seq)
+
+                state = next_state_flat.reshape(n_samples, B, T_enc, D)              # ← reshape
+
+                goal_expanded = goal_enc.unsqueeze(0)
+                mse = (state - goal_expanded).pow(2).mean(dim=-1).mean(dim=-1)       # (n_samples, B)
+                costs += mse.mean(dim=-1)
+
             return costs
     
         # ── Run CEM ──
@@ -268,9 +262,9 @@ class JEPA(nn.Module, BasePolicy):
     
         best_z, _, _ = cem.optimize(cost_fn)
     
-        # ── Execute best noise: get the first next-state prediction ──
-        best_z = best_z.view(planning_horizon, num_steps, T_enc, D)
-        noise_seq = best_z[0].unsqueeze(0).expand(B, -1, -1, -1)
+        # ── Execute best noise: get the first next-state prediction ──    
+        best_z = best_z.view(B, planning_horizon, num_steps, T_enc, D)  # ← include B
+        noise_seq = best_z[:, 0]                                         # (B, num_steps, T_enc, D)
         best_next_state = diffusion_sample_with_noise(self.predictor, current_enc, noise_seq)
     
         # ── Decode action ──
