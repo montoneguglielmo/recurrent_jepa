@@ -184,11 +184,12 @@ class JEPA(nn.Module, BasePolicy):
         self,
         info,
         # CEM hyperparameters
-        n_samples: int = 150,
-        n_elite: int = 30,
+        n_samples: int = 50,
+        n_elite: int = 10,
         n_cem_iters: int = 5,
         planning_horizon: int = 5,
         init_std: float = 1.0,
+        num_inference_steps: int = 20
     ):
         """
         CEM-based policy for JEPA with a diffusion predictor.
@@ -215,7 +216,7 @@ class JEPA(nn.Module, BasePolicy):
     
         B, T_enc, D = current_enc.shape
         device = current_enc.device
-        num_steps = self.predictor.num_steps  # diffusion steps
+        num_steps = num_inference_steps  # diffusion steps
     
         # ── Noise shape for one prediction step ──
         # Each diffusion sample needs (num_steps, T_enc, D) noise vectors.
@@ -240,7 +241,7 @@ class JEPA(nn.Module, BasePolicy):
                 noise_seq = z[:, :, h].reshape(n_samples * B, num_steps, T_enc, D)  # ← reshape
                 state_flat = state.reshape(n_samples * B, T_enc, D)                  # ← reshape
 
-                next_state_flat = diffusion_sample_with_noise(self.predictor, state_flat, noise_seq)
+                next_state_flat = diffusion_sample_with_noise(self.predictor, state_flat, noise_seq, num_inference_steps)
 
                 state = next_state_flat.reshape(n_samples, B, T_enc, D)              # ← reshape
 

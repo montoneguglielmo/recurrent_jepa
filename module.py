@@ -200,7 +200,7 @@ class ConditionalDiffusionPredictor(nn.Module):
         num_layers: int = 4,
         beta_start: float = 1e-4,
         beta_end: float = 2e-2,
-    ):
+        ):
         super().__init__()
         self.num_steps = num_steps
         self.output_size = embed_dim
@@ -265,22 +265,33 @@ class ConditionalDiffusionPredictor(nn.Module):
         return x_t + self.output_proj(h)            # residual: near-identity at init
 
     @torch.no_grad()
-    def sample(self, cond: torch.Tensor) -> torch.Tensor:
+    def sample(self, cond: torch.Tensor, num_inference_steps: int | None = None) -> torch.Tensor:
         """Full DDPM reverse chain starting from noise, conditioned on cond."""
+        if num_inference_steps is None:
+            num_inference_steps = self.num_steps
+            
+        # Pick evenly-spaced subset of timesteps
+        step_indices = torch.linspace(0, self.num_steps - 1, num_inference_steps).long()
+        timesteps = step_indices.flip(0).tolist()  # reversed, high → low
+
         x = torch.randn_like(cond)
         B = cond.shape[0]
 
-        for step in reversed(range(self.num_steps)):
+        for i, step in enumerate(timesteps):
             t = torch.full((B,), step, device=cond.device, dtype=torch.long)
             x0_pred = self.denoise(x, t, cond).clamp(-10, 10)
 
-            if step == 0:
+            if i == len(timesteps) - 1:  # last step
                 x = x0_pred
             else:
-                ab     = self._gather(self.alphas_cumprod,      t, x.ndim)
-                ab_prev = self._gather(self.alphas_cumprod_prev, t, x.ndim)
-                alpha  = self._gather(self.alphas,               t, x.ndim)
-                beta   = self._gather(self.betas,                t, x.ndim)
+                prev_step = timesteps[i + 1]
+                t_prev = torch.full((B,), prev_step, device=cond.device, dtype=torch.long)
+
+                ab      = self._gather(self.alphas_cumprod,      t,      x.ndim)
+                ab_prev = self._gather(self.alphas_cumprod,      t_prev, x.ndim)  # ← use actual prev step
+                alpha   = self._gather(self.alphas,              t,      x.ndim)
+                beta    = self._gather(self.betas,               t,      x.ndim)
+
                 mean = (
                     (ab_prev.sqrt() * beta) / (1 - ab) * x0_pred
                     + (alpha.sqrt() * (1 - ab_prev)) / (1 - ab) * x
@@ -290,18 +301,19 @@ class ConditionalDiffusionPredictor(nn.Module):
 
         return x
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        x: (B, T, D) embeddings from state encoder.
-        Returns (B, T, D) predicted embeddings.
-        """
+    def forward(self, x: torch.Tensor, num_inference_steps: int | None = None) -> torch.Tensor:
         if self.training:
             B = x.shape[0]
             t = torch.randint(0, self.num_steps, (B,), device=x.device)
             x_t = self.q_sample(x, t)
             return self.denoise(x_t, t, cond=x)
         else:
-            return self.sample(cond=x)
+            return self.sample(cond=x, num_inference_steps=num_inference_steps)
+    
+    def __getattr__(self, name: str):
+        if name == 'num_inference_steps':
+            return self.num_steps
+        return super().__getattr__(name)
         
         
         

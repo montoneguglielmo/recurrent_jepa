@@ -154,6 +154,7 @@ def diffusion_sample_with_noise(
     model,
     cond: torch.Tensor,
     noise_sequence: torch.Tensor,
+    num_inference_steps: int | None = None,
 ) -> torch.Tensor:
     """
     Run the DDPM reverse chain but using *externally supplied* noise
@@ -161,30 +162,41 @@ def diffusion_sample_with_noise(
 
     Parameters
     ----------
-    model          : ConditionalDiffusionPredictor
-    cond           : (B, T, D) — conditioning embeddings
-    noise_sequence : (B, num_steps, T, D) — one noise tensor per reverse step.
-                    noise_sequence[:, s] is used at reverse step s
-                    (s=0 corresponds to t=num_steps-1, s=-1 to t=1).
+    model              : ConditionalDiffusionPredictor
+    cond               : (B, T, D) — conditioning embeddings
+    noise_sequence     : (B, num_inference_steps, T, D) — one noise tensor per reverse step.
+                        noise_sequence[:, 0] is the initial noise,
+                        noise_sequence[:, s] is used at reverse step s.
+    num_inference_steps: number of steps to use. Defaults to model.num_inference_steps.
 
     Returns
     -------
     x : (B, T, D) — denoised sample
     """
-    x = noise_sequence[:, 0]  # initial noise (replaces torch.randn_like)
+    if num_inference_steps is None:
+        num_inference_steps = model.num_inference_steps
+
+    # Build the same strided timestep schedule as model.sample()
+    step_indices = torch.linspace(0, model.num_steps - 1, num_inference_steps).long()
+    timesteps = step_indices.flip(0).tolist()  # high → low
+
+    x = noise_sequence[:, 0]  # initial noise
     B = cond.shape[0]
 
-    for idx, step in enumerate(reversed(range(model.num_steps))):
+    for i, step in enumerate(timesteps):
         t = torch.full((B,), step, device=cond.device, dtype=torch.long)
         x0_pred = model.denoise(x, t, cond).clamp(-10, 10)
 
-        if step == 0:
+        if i == len(timesteps) - 1:  # last step
             x = x0_pred
         else:
-            ab = model._gather(model.alphas_cumprod, t, x.ndim)
-            ab_prev = model._gather(model.alphas_cumprod_prev, t, x.ndim)
-            alpha = model._gather(model.alphas, t, x.ndim)
-            beta = model._gather(model.betas, t, x.ndim)
+            prev_step = timesteps[i + 1]
+            t_prev = torch.full((B,), prev_step, device=cond.device, dtype=torch.long)
+
+            ab      = model._gather(model.alphas_cumprod, t,      x.ndim)
+            ab_prev = model._gather(model.alphas_cumprod, t_prev, x.ndim)  # actual prev step
+            alpha   = model._gather(model.alphas,         t,      x.ndim)
+            beta    = model._gather(model.betas,          t,      x.ndim)
 
             mean = (
                 (ab_prev.sqrt() * beta) / (1 - ab) * x0_pred
@@ -192,9 +204,7 @@ def diffusion_sample_with_noise(
             )
             var = model._gather(model.posterior_variance, t, x.ndim)
 
-            # Use the externally provided noise instead of torch.randn_like
-            # idx+1 because idx=0 was used as the initial noise
-            z = noise_sequence[:, idx + 1] if (idx + 1) < noise_sequence.shape[1] else torch.zeros_like(x)
+            z = noise_sequence[:, i + 1] if (i + 1) < noise_sequence.shape[1] else torch.zeros_like(x)
             x = mean + var.sqrt() * z
 
     return x
