@@ -18,7 +18,7 @@ import numpy as np
 import stable_pretraining as spt
 import torch
 import wandb
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf, open_dict
 from sklearn import preprocessing
 from torchvision.transforms import v2 as transforms
 import stable_worldmodel as swm
@@ -74,6 +74,24 @@ def run(cfg: DictConfig):
             project=cfg.wandb.project,
             config=OmegaConf.to_container(cfg, resolve=True, throw_on_missing=False),
         )
+        # Apply sweep overrides back into cfg (no-op when not running as a sweep agent)
+        with open_dict(cfg):
+            for key, value in wandb.config.items():
+                try:
+                    OmegaConf.update(cfg, key, value)
+                except Exception:
+                    pass
+
+    gac = cfg.get("get_action_config")
+    if gac and gac.replanning_steps > gac.planning_horizon:
+        print(
+            f"Skipping invalid combination: replanning_steps={gac.replanning_steps} "
+            f"> planning_horizon={gac.planning_horizon}"
+        )
+        if cfg.wandb.enabled:
+            wandb.log({"success_rate": float("nan")})
+            wandb.finish()
+        return
 
     assert (
         cfg.plan_config.horizon * cfg.plan_config.action_block <= cfg.eval.eval_budget
