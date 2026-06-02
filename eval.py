@@ -4,9 +4,6 @@ import warnings
 from datetime import datetime
 from functools import partial
 
-os.environ["MUJOCO_GL"] = "egl"
-os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"  # required for torch deterministic algorithms on GPU
-
 warnings.filterwarnings("ignore", category=UserWarning, module="gymnasium")
 warnings.filterwarnings("ignore", category=FutureWarning, message=".*sdp_kernel.*")
 
@@ -61,12 +58,6 @@ def run(cfg: DictConfig):
     random.seed(cfg.seed)
     np.random.seed(cfg.seed)
     torch.manual_seed(cfg.seed)
-    torch.cuda.manual_seed_all(cfg.seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-    torch.backends.cuda.enable_flash_sdp(False)
-    torch.backends.cuda.enable_mem_efficient_sdp(False)
-    torch.use_deterministic_algorithms(True)
 
     if cfg.wandb.enabled:
         wandb.init(
@@ -159,8 +150,10 @@ def run(cfg: DictConfig):
             )
 
         if cfg.get("get_action_config"):
+            method_name = cfg.get("get_action_method", "get_action")
             policy.get_action = partial(
-                policy.get_action, **OmegaConf.to_container(cfg.get_action_config, resolve=True)
+                getattr(policy, method_name),
+                **OmegaConf.to_container(cfg.get_action_config, resolve=True)
             )
 
     results_path = (

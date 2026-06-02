@@ -27,12 +27,12 @@ plan_config:
 
 get_action_config:
   replanning_steps: 5
-  n_samples: 200
+  n_samples: 1500
   n_elite: 10
-  n_cem_iters: 10
+  n_cem_iters:  15
   planning_horizon: 5
   init_std: 1.0
-  num_inference_steps: 20
+  num_inference_steps: 10
   eval_budget: ${eval.eval_budget}
 
 # evaluation from dataset (replay expert trajectories)

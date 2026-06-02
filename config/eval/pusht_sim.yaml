@@ -1,0 +1,13 @@
+defaults:
+  - pusht
+  - _self_
+
+get_action_method: get_action_sim
+get_action_config:
+  n_samples: 30
+  n_elite: 10
+  n_cem_iters: 5
+  planning_horizon: 5
+  init_std: 1.0
+  replanning_steps: 5
+  eval_budget: ${eval.eval_budget}

@@ -1,5 +1,11 @@
 program: eval.py
+entity: montone-guglielmo-wb
+project: lewm-eval
 method: bayes
+command:
+  - ${env}
+  - python
+  - ${program}
 metric:
   name: success_rate
   goal: maximize
@@ -19,12 +25,12 @@ parameters:
         min: 5
         max: 30
       planning_horizon:
-        values: [3, 5, 7, 10]
+        values: [3, 5, 7]
       init_std:
         distribution: uniform
         min: 0.5
         max: 2.0
       num_inference_steps:
-        values: [10, 20, 30]
+        values: [10, 20, 30, 50]
       replanning_steps:
-        values: [1, 3, 5, 10]
+        values: [3, 5]

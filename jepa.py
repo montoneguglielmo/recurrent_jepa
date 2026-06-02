@@ -1,5 +1,6 @@
 from collections import deque
 
+import numpy as np
 from torch import nn
 import torch
 from tqdm import tqdm
@@ -290,8 +291,127 @@ class JEPA(nn.Module, BasePolicy):
 
         self._pbar.update(1)
         return self._postprocess_action(self._action_buffer.popleft())
-        
-        
 
-            
+    def _init_sim_env(self):
+        from stable_worldmodel.envs.pusht import PushT
+        import pygame
+        if not pygame.get_init():
+            pygame.init()
+        self._sim_env = PushT(render_mode='rgb_array', resolution=224)
+        self._sim_env.reset(seed=0)
+
+    @torch.no_grad()
+    def get_action_sim(
+        self,
+        info,
+        n_samples: int = 30,
+        n_elite: int = 10,
+        n_cem_iters: int = 5,
+        planning_horizon: int = 5,
+        init_std: float = 1.0,
+        replanning_steps: int = 5,
+        eval_budget: int | None = None,
+        **_,
+    ):
+        """
+        CEM-based planning using the real PushT simulator, bypassing the neural predictor.
+        Optimises normalised action sequences directly; scores each candidate by encoding the
+        resulting observation with the JEPA encoder and comparing to the goal embedding.
+        """
+        if not getattr(self, '_action_buffer', None):
+            self._action_buffer = deque()
+
+        if not hasattr(self, '_pbar') or self._pbar.n >= self._pbar.total:
+            self._pbar = tqdm(total=eval_budget, desc='Evaluating', unit='step')
+
+        if len(self._action_buffer) > 0:
+            self._pbar.set_description('Executing')
+            self._pbar.update(1)
+            return self._postprocess_action(self._action_buffer.popleft())
+
+        self._pbar.set_description('Planning (sim-CEM)')
+
+        # ── Encode current & goal ──
+        pixels      = self._preprocess_pixels(info['pixels'])
+        goal_pixels = self._preprocess_pixels(info['goal'])
+        proprio     = self._preprocess_proprio(info['proprio'])
+        goal_proprio = self._preprocess_proprio(info['goal_proprio'])
+
+        current_enc = self._encode([pixels, proprio])         # (B, 1, D)
+        goal_enc    = self._encode([goal_pixels, goal_proprio])  # (B, 1, D)
+
+        B      = current_enc.shape[0]
+        device = current_enc.device
+
+        # ── Extract raw env states (B, 7) ──
+        state_raw = info['state']
+        if isinstance(state_raw, torch.Tensor):
+            state_raw = state_raw.numpy()
+        state_raw = state_raw[:, -1, :]   # (B, 7) — last history frame, raw/unnormalised
+
+        # ── Lazy-init simulation env ──
+        if not hasattr(self, '_sim_env') or self._sim_env is None:
+            self._init_sim_env()
+
+        # Set a valid goal on the sim env to prevent eval_state crash during step()
+        goal_state_raw = info.get('goal_state')
+        if goal_state_raw is not None:
+            if isinstance(goal_state_raw, torch.Tensor):
+                goal_state_raw = goal_state_raw.numpy()
+            self._sim_env._set_goal_state(goal_state_raw[0, -1])
+
+        # ── CEM cost function ──
+        # z: (n_samples, B * planning_horizon * 2) — normalised action sequences, one plan per env
+        def cost_fn(z):
+            ns = z.shape[0]
+            z_acts = z.view(ns, B, planning_horizon, 2)
+
+            all_pix  = []
+            all_prop = []
+
+            for s in range(ns):
+                for b in range(B):
+                    self._sim_env._set_state(state_raw[b])
+                    for h in range(planning_horizon):
+                        a = self._postprocess_action(z_acts[s, b, h:h+1].to(device))
+                        a_np = a.squeeze().cpu().numpy().clip(-1.0, 1.0).astype(np.float32)
+                        obs, _, _, _, _ = self._sim_env.step(a_np)
+                    all_pix.append(self._sim_env.render())   # (H, W, 3) after final step
+                    all_prop.append(obs['proprio'])           # (4,)
+
+            all_pix_np  = np.array(all_pix)[:, None]   # (ns*B, 1, H, W, 3)
+            all_prop_np = np.array(all_prop)[:, None]  # (ns*B, 1, 4)
+
+            enc_list = []
+            for i in range(0, ns * B, 64):
+                j = min(i + 64, ns * B)
+                enc_list.append(self._encode([
+                    self._preprocess_pixels(all_pix_np[i:j]),
+                    self._preprocess_proprio(all_prop_np[i:j]),
+                ]))
+            enc = torch.cat(enc_list, 0).reshape(ns, B, 1, -1)  # (ns, B, 1, D)
+
+            mse = (enc - goal_enc.unsqueeze(0)).pow(2).mean(-1).mean(-1)  # (ns, B)
+            return mse.mean(dim=1)   # (ns,) — mean cost across all B envs
+
+        # ── Run CEM ──
+        cem = CEM(
+            dim=B * planning_horizon * 2,
+            n_samples=n_samples,
+            n_elite=n_elite,
+            n_iters=n_cem_iters,
+            init_std=init_std,
+            device=device,
+        )
+        best_z, _, _ = cem.optimize(cost_fn)
+
+        # ── Buffer best actions ──
+        best_actions = best_z.view(B, planning_horizon, 2)   # (B, planning_horizon, 2)
+        for t in range(min(replanning_steps, planning_horizon)):
+            self._action_buffer.append(best_actions[:, t])   # (B, 2)
+
+        self._pbar.update(1)
+        return self._postprocess_action(self._action_buffer.popleft())
+
+
         
