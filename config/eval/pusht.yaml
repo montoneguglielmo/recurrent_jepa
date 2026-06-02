@@ -27,7 +27,7 @@ plan_config:
 
 get_action_config:
   replanning_steps: 5
-  n_samples: 100
+  n_samples: 200
   n_elite: 10
   n_cem_iters: 10
   planning_horizon: 5
@@ -54,5 +54,10 @@ eval:
         goal_state:
           value: goal_state
           
+wandb:
+  enabled: True
+  entity: montone-guglielmo-wb
+  project: lewm-eval
+
 output:
   filename: pusht_results.txt

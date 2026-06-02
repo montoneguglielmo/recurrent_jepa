@@ -17,6 +17,7 @@ import hydra
 import numpy as np
 import stable_pretraining as spt
 import torch
+import wandb
 from omegaconf import DictConfig, OmegaConf
 from sklearn import preprocessing
 from torchvision.transforms import v2 as transforms
@@ -66,6 +67,13 @@ def run(cfg: DictConfig):
     torch.backends.cuda.enable_flash_sdp(False)
     torch.backends.cuda.enable_mem_efficient_sdp(False)
     torch.use_deterministic_algorithms(True)
+
+    if cfg.wandb.enabled:
+        wandb.init(
+            entity=cfg.wandb.entity,
+            project=cfg.wandb.project,
+            config=OmegaConf.to_container(cfg, resolve=True, throw_on_missing=False),
+        )
 
     assert (
         cfg.plan_config.horizon * cfg.plan_config.action_block <= cfg.eval.eval_budget
@@ -188,8 +196,16 @@ def run(cfg: DictConfig):
         video_path=results_path,
     )
     end_time = time.time()
-    
+    evaluation_time = end_time - start_time
+
     print(metrics)
+
+    if cfg.wandb.enabled:
+        wandb.log({
+            "success_rate": metrics["success_rate"],
+            "evaluation_time": evaluation_time,
+        })
+        wandb.finish()
 
     results_path = results_path / cfg.output.filename
     results_path.parent.mkdir(parents=True, exist_ok=True)
@@ -203,7 +219,7 @@ def run(cfg: DictConfig):
 
         f.write("==== RESULTS ====\n")
         f.write(f"metrics: {metrics}\n")
-        f.write(f"evaluation_time: {end_time - start_time} seconds\n")
+        f.write(f"evaluation_time: {evaluation_time} seconds\n")
 
 
 if __name__ == "__main__":
