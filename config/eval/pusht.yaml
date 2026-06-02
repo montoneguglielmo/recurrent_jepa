@@ -27,9 +27,9 @@ plan_config:
 
 get_action_config:
   replanning_steps: 5
-  n_samples: 300
-  n_elite: 30
-  n_cem_iters: 20
+  n_samples: 100
+  n_elite: 10
+  n_cem_iters: 10
   planning_horizon: 5
   init_std: 1.0
   num_inference_steps: 20

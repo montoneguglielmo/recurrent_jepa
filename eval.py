@@ -1,5 +1,6 @@
 import os
 import warnings
+from datetime import datetime
 from functools import partial
 
 os.environ["MUJOCO_GL"] = "egl"
@@ -129,6 +130,7 @@ def run(cfg: DictConfig):
         if cfg.policy != "random"
         else Path(__file__).parent
     )
+    results_path = results_path / datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
     # sample the episodes and the starting indices
     episode_len = get_episodes_length(dataset, ep_indices)
