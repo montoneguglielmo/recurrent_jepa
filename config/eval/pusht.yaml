@@ -25,6 +25,16 @@ plan_config:
   receding_horizon: 5
   action_block: 5 # frameskip
 
+get_action_config:
+  replanning_steps: 5
+  n_samples: 300
+  n_elite: 30
+  n_cem_iters: 20
+  planning_horizon: 5
+  init_std: 1.0
+  num_inference_steps: 20
+  eval_budget: ${eval.eval_budget}
+
 # evaluation from dataset (replay expert trajectories)
 eval:
   num_eval: 50

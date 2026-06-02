@@ -2,6 +2,7 @@ from collections import deque
 
 from torch import nn
 import torch
+from tqdm import tqdm
 from stable_worldmodel.policy import BasePolicy
 from utils import CEM, diffusion_sample_with_noise
 
@@ -178,18 +179,23 @@ class JEPA(nn.Module, BasePolicy):
     
     def reset(self):
         self._action_buffer = deque()
+        if hasattr(self, '_pbar'):
+            self._pbar.close()
+            del self._pbar
         
     @torch.no_grad()
     def get_action(
         self,
         info,
         # CEM hyperparameters
-        n_samples: int = 50,
-        n_elite: int = 10,
-        n_cem_iters: int = 5,
+        n_samples: int = 300,
+        n_elite: int = 30,
+        n_cem_iters: int = 20,
         planning_horizon: int = 5,
         init_std: float = 1.0,
-        num_inference_steps: int = 20
+        num_inference_steps: int = 20,
+        replanning_steps: int = 5,
+        eval_budget: int | None = None,
     ):
         """
         CEM-based policy for JEPA with a diffusion predictor.
@@ -198,13 +204,19 @@ class JEPA(nn.Module, BasePolicy):
         this uses CEM to iteratively refine the diffusion noise vectors that
         produce the best goal-reaching trajectory.
         """
-        print('Running get_action')
         if not getattr(self, '_action_buffer', None):
             self._action_buffer = deque()
-    
+
+        if not hasattr(self, '_pbar') or self._pbar.n >= self._pbar.total:
+            self._pbar = tqdm(total=eval_budget, desc='Evaluating', unit='step')
+
         if len(self._action_buffer) > 0:
+            self._pbar.set_description('Executing')
+            self._pbar.update(1)
             return self._postprocess_action(self._action_buffer.popleft())
-    
+
+        self._pbar.set_description('Planning (CEM)')
+
         # ── Encode current & goal ──
         pixels = self._preprocess_pixels(info['pixels'])
         goal_pixels = self._preprocess_pixels(info['goal'])
@@ -273,9 +285,10 @@ class JEPA(nn.Module, BasePolicy):
         actions = self.decoder(decoder_input)
     
         # Buffer the action chunks (matching your original chunking logic)
-        for t in range(5):
+        for t in range(replanning_steps):
             self._action_buffer.append(actions[:, 0, 2 * t : 2 * t + 2])
-    
+
+        self._pbar.update(1)
         return self._postprocess_action(self._action_buffer.popleft())
         
         

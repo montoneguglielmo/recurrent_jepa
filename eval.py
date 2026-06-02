@@ -1,6 +1,11 @@
 import os
+import warnings
+from functools import partial
 
 os.environ["MUJOCO_GL"] = "egl"
+
+warnings.filterwarnings("ignore", category=UserWarning, module="gymnasium")
+warnings.filterwarnings("ignore", category=FutureWarning, message=".*sdp_kernel.*")
 
 import time
 from pathlib import Path
@@ -112,6 +117,11 @@ def run(cfg: DictConfig):
             policy.set_normalization_stats(
                 proprio_stats=_scaler_to_stats(process['proprio']),
                 action_stats=_scaler_to_stats(process['action']),
+            )
+
+        if cfg.get("get_action_config"):
+            policy.get_action = partial(
+                policy.get_action, **OmegaConf.to_container(cfg.get_action_config, resolve=True)
             )
 
     results_path = (
