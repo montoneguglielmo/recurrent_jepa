@@ -1,9 +1,11 @@
 import os
+import random
 import warnings
 from datetime import datetime
 from functools import partial
 
 os.environ["MUJOCO_GL"] = "egl"
+os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"  # required for torch deterministic algorithms on GPU
 
 warnings.filterwarnings("ignore", category=UserWarning, module="gymnasium")
 warnings.filterwarnings("ignore", category=FutureWarning, message=".*sdp_kernel.*")
@@ -55,6 +57,16 @@ def get_dataset(cfg, dataset_name):
 @hydra.main(version_base=None, config_path="./config/eval", config_name="pusht")
 def run(cfg: DictConfig):
     """Run evaluation of dinowm vs random policy."""
+    random.seed(cfg.seed)
+    np.random.seed(cfg.seed)
+    torch.manual_seed(cfg.seed)
+    torch.cuda.manual_seed_all(cfg.seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cuda.enable_flash_sdp(False)
+    torch.backends.cuda.enable_mem_efficient_sdp(False)
+    torch.use_deterministic_algorithms(True)
+
     assert (
         cfg.plan_config.horizon * cfg.plan_config.action_block <= cfg.eval.eval_budget
     ), "Planning horizon must be smaller than or equal to eval_budget"
